@@ -47,6 +47,8 @@
 #include <iostream>
 
 #define BREAKPOINT __builtin_debugtrap()
+// An dereferentiable array litteral.
+#define A(T, ...) (std::initializer_list<T>({__VA_ARGS__}).begin())
 
 // $ sysctl hw.cachelinesize
 // hw.cachelinesize: 64
@@ -105,19 +107,23 @@ void putText(cv::Mat img, const cv::String &text, cv::Point org) {
 		bottomLeftOrigin);
 }
 
+// TODO: this function should be able to visualize a list of list of images
+// to switch between them we can use up and dowon arrow. We have to remember the
+// posizion of the trackbar and change the dimension according to de dataset.
 static void
 explore_dataset(
-	const char *window_name,
+	const cv::String &window_name,
 	const std::vector<cv::Mat>& imgs) {
-	CV_Assert(window_name);
 	CV_Assert(imgs.size() > 0);
+
+	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
 
 	int index = 0;
 	int index_max = imgs.size() - 1; // NOTE: this is a conversion from size_t to int
 	struct name_and_imgs {
 		const char *window_name;
 		const std::vector<cv::Mat> &imgs;
-	} data = {window_name, imgs};
+	} data = {window_name.c_str(), imgs};
 	auto update_img = [](int pos, void *userdata) {
 		name_and_imgs *data = (name_and_imgs *) userdata;
 		cv::imshow(data->window_name, data->imgs[pos]);
@@ -146,6 +152,11 @@ explore_dataset(
 		}; break;
 		}
 	}
+
+	// Saddly windows are not destroyed.
+	cv::destroyWindow(window_name);
+	cv::destroyAllWindows();
+	(void) cv::waitKey(1);
 }
 
 // Debugging utilities. ////////////////////////////////////////////////////////
@@ -350,7 +361,7 @@ read_csv(
 }
 
 // To be used only with paths returned by glob.
-struct ParallelRead : public cv::ParallelLoopBody {
+struct ParallelRead CV_FINAL : public cv::ParallelLoopBody {
 
 	// Posso usare OpenCV parallel_for_ lèggendo dai CSV se divido il file CSV
 	// in proc_count (e.g. 12) parti e ogni thread, tranne il primo, cercano
@@ -428,9 +439,7 @@ struct ParallelRead : public cv::ParallelLoopBody {
 
 };
 
-#define A(T, ...) (std::initializer_list<T>({__VA_ARGS__}).begin())
-
-struct ParallelClassification : public cv::ParallelLoopBody {
+struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 
 	struct alignas(cache_line_size) Size {
 		size_t size;
@@ -479,67 +488,81 @@ struct ParallelClassification : public cv::ParallelLoopBody {
 				cv::InterpolationFlags interpolation =
 					img.size().area() < standardized_size.area()
 					? cv::INTER_CUBIC : cv::INTER_AREA;
-				cv::resize(copyTo(img, copied), img, standardized_size, fx, fy, interpolation);
+				cv::resize(copyTo(img, copied), img, standardized_size, fx, fy,
+					interpolation);
 			}
-			stages.push_back(img);
 
 			cv::Mat work_img(img.rows, img.cols, CV_8UC1);
 
-			{
-				cv::cvtColor(img, work_img, cv::COLOR_BGR2GRAY);
-				CV_Assert(work_img.size() == img.size());
-				CV_Assert(work_img.type() == CV_8UC1);
-			}
-
-			// High pass filter for sharpening the image and removing noise.
-			{
-				int ksize = 7;
-				cv::medianBlur(copyTo(work_img, copied), work_img, ksize);
-				CV_Assert(work_img.size() == img.size());
-				CV_Assert(work_img.type() == CV_8UC1);
-			}
-			stages.push_back(work_img.clone());
-
-			// https://cvexplained.wordpress.com/tag/canny-edge-detector/
-			{
-				double threshold1 = 80, threshold2 = 200;
-				int apertureSize = 3;
-				bool L2gradient = true;
-				cv::Canny(copyTo(work_img, copied), work_img, threshold1,
-					threshold2, apertureSize, L2gradient);
-				CV_Assert(work_img.size() == img.size());
-				CV_Assert(work_img.type() == CV_8UC1);
-			}
-			stages.push_back(work_img.clone());
-
-			{
-				cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
-				cv::Point center = img.size()/2;
-				int radius = center.x/1.7;
-				cv::Scalar white(0xff, 0xff, 0xff);
-				int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
-				cv::circle(mask, center, radius, white, thickness, lineType, shift);
-				cv::bitwise_and(copyTo(work_img, copied), mask, work_img);
-			}
-			stages.push_back(work_img.clone());
-
+			// We try multiple times to find enough lines (2) in the image with
+			// a sequence of different parameters. Usually the clock with
+			// thicker hands can tollerate a stronger denoising and a less
+			// sensitive edge detection. The opposite is true for the clocks
+			// with thinner hands.
 			cv::Mat lines;
-			{
-				double rho = 1, theta = 1 * CV_PI / 180;
-				// Sinche most images are small and noisy this parameters need
-				// to be low.
-				int threshold = 15;
-				double minLineLenght = 10, maxLineGap = 100;
-				cv::HoughLinesP(work_img, lines, rho, theta, threshold,
-					minLineLenght, maxLineGap);
-				// NOTE: here we could retry with different parameters.
-				if (lines.rows < 2) {
-					skipped_imgs.append(stages);
-					++skipped[thread_num];
-					continue;
+			bool enough_lines = false;
+			for (int attempt = 0; attempt < 3; ++attempt) {
+				stages.clear();
+				stages.push_back(img);
+				{
+					cv::cvtColor(img, work_img, cv::COLOR_BGR2GRAY);
+					CV_Assert(work_img.size() == img.size());
+					CV_Assert(work_img.type() == CV_8UC1);
 				}
-				CV_Assert(lines.cols == 1);
-				CV_Assert(lines.type() == CV_32SC4);
+
+				// High pass filter for sharpening the image and removing noise.
+				{
+					int ksize = A(int, 7, 5, 3)[attempt];
+					cv::medianBlur(copyTo(work_img, copied), work_img, ksize);
+					CV_Assert(work_img.size() == img.size());
+					CV_Assert(work_img.type() == CV_8UC1);
+				}
+				stages.push_back(work_img.clone());
+
+				// https://cvexplained.wordpress.com/tag/canny-edge-detector/
+				{
+					double threshold1 = A(double, 80, 40, 20)[attempt],
+						threshold2 = A(double, 200, 100, 80)[attempt];
+					int apertureSize = 3;
+					bool L2gradient = true;
+					cv::Canny(copyTo(work_img, copied), work_img, threshold1,
+						threshold2, apertureSize, L2gradient);
+					CV_Assert(work_img.size() == img.size());
+					CV_Assert(work_img.type() == CV_8UC1);
+				}
+				stages.push_back(work_img.clone());
+
+				{
+					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
+					cv::Point center = img.size()/2;
+					int radius = center.x/1.7;
+					cv::Scalar white(0xff, 0xff, 0xff);
+					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
+					cv::circle(mask, center, radius, white, thickness, lineType, shift);
+					cv::bitwise_and(copyTo(work_img, copied), mask, work_img);
+				}
+				stages.push_back(work_img.clone());
+
+				{
+					double rho = 1, theta = 1 * CV_PI / 180;
+					// Since most images are small and noisy this parameters need
+					// to be low.
+					int threshold = 15;
+					double minLineLenght = 10, maxLineGap = 100;
+					cv::HoughLinesP(work_img, lines, rho, theta, threshold,
+						minLineLenght, maxLineGap);
+					if (lines.rows >= 2) {
+						CV_Assert(lines.cols == 1);
+						CV_Assert(lines.type() == CV_32SC4);
+						enough_lines = true;
+						break;
+					}
+				}
+			}
+			if (!enough_lines) {
+				skipped_imgs.append(stages);
+				++skipped[thread_num];
+				continue;
 			}
 
 			constexpr int K = 2;
@@ -795,11 +818,11 @@ main(int argc, char **argv) {
 		<< "correct: " << (float) tot_correct / dataset_size << '\n'
 		<< "skipped: " << (float) tot_skipped / dataset_size << '\n';
 
-	const char *window_name = "data";
-	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
+	// (void) cv::startWindowThread();
+	cv::String window_name = "skipped";
 	explore_dataset(window_name, skipped_imgs.mats);
+	window_name = "misclassified";
 	explore_dataset(window_name, wrong_imgs.mats);
-	// cv::destroyWindow(window_name);
 
 	return static_cast<int>(retCode::OK);
 }
