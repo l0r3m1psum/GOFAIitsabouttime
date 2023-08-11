@@ -516,8 +516,23 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					cv::medianBlur(copyTo(work_img, copied), work_img, ksize);
 					CV_Assert(work_img.size() == img.size());
 					CV_Assert(work_img.type() == CV_8UC1);
+					stages.push_back(work_img.clone());
 				}
-				stages.push_back(work_img.clone());
+
+				// We mask the image before the edge detection to minimize the
+				// number of edges that cound confuse the subsequent pahse.
+				{
+					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
+					cv::Point center = img.size()/2;
+					int radius = center.x/1.8;
+					cv::Scalar white(0xff, 0xff, 0xff);
+					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
+					cv::circle(mask, center, radius, white, thickness, lineType, shift);
+					cv::bitwise_and(copyTo(work_img, copied), mask, work_img);
+					CV_Assert(work_img.size() == img.size());
+					CV_Assert(work_img.type() == CV_8UC1);
+					stages.push_back(work_img.clone());
+				}
 
 				// https://cvexplained.wordpress.com/tag/canny-edge-detector/
 				{
@@ -529,9 +544,12 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						threshold2, apertureSize, L2gradient);
 					CV_Assert(work_img.size() == img.size());
 					CV_Assert(work_img.type() == CV_8UC1);
+					stages.push_back(work_img.clone());
 				}
-				stages.push_back(work_img.clone());
 
+				// At this point the edge detector always detects a circle
+				// arround the previous mask. We remove it by using a slightly
+				// smaller circular mask.
 				{
 					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
 					cv::Point center = img.size()/2;
@@ -540,8 +558,10 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
 					cv::circle(mask, center, radius, white, thickness, lineType, shift);
 					cv::bitwise_and(copyTo(work_img, copied), mask, work_img);
+					CV_Assert(work_img.size() == img.size());
+					CV_Assert(work_img.type() == CV_8UC1);
+					stages.push_back(work_img.clone());
 				}
-				stages.push_back(work_img.clone());
 
 				{
 					double rho = 1, theta = 1 * CV_PI / 180;
@@ -673,13 +693,11 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				}
 				cv::arrowedLine(viz, min_p1, min_p2, green);
 				cv::arrowedLine(viz, hour_p1, hour_p2, green);
-				cv::String predicted_text = std::to_string(hour) + ":"
-					+ std::to_string(minute);
+				cv::String predicted_text = cv::format("%d:%d", hour, minute);
 				putText(viz, predicted_text, cv::Point(10,40));
 				int label_hour = labels[r]/60;
 				int label_min = labels[r]%60;
-				cv::String label_text = std::to_string(label_hour) + ":"
-					+ std::to_string(label_min);
+				cv::String label_text = cv::format("%d:%d", label_hour, label_min);
 				putText(viz, label_text, cv::Point(10, 80));
 				cv::drawMarker(viz, intersec, blue);
 				stages.push_back(viz);
@@ -820,7 +838,7 @@ main(int argc, char **argv) {
 
 	// (void) cv::startWindowThread();
 	cv::String window_name = "skipped";
-	explore_dataset(window_name, skipped_imgs.mats);
+	// explore_dataset(window_name, skipped_imgs.mats);
 	window_name = "misclassified";
 	explore_dataset(window_name, wrong_imgs.mats);
 
