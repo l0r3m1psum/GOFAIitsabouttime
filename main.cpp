@@ -553,7 +553,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				{
 					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
 					cv::Point center = img.size()/2;
-					int radius = center.x/1.7;
+					int radius = center.x/1.8-1;
 					cv::Scalar white(0xff, 0xff, 0xff);
 					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
 					cv::circle(mask, center, radius, white, thickness, lineType, shift);
@@ -561,6 +561,25 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					CV_Assert(work_img.size() == img.size());
 					CV_Assert(work_img.type() == CV_8UC1);
 					stages.push_back(work_img.clone());
+				}
+
+				// TODO: maybe dilate the image a bit.
+
+				// TODO: find a way to remove the "small lines".
+				{
+					cv::Mat labels, stats, centroids;
+					int connectivity = 8, ltype = CV_16U, ccltype = cv::CCL_DEFAULT;
+					int n_labels = cv::connectedComponentsWithStats(
+						work_img, labels, stats, centroids,
+						connectivity, ltype, ccltype
+					);
+					CV_Assert(stats.rows == n_labels);
+					CV_Assert(centroids.rows == n_labels);
+					// FIXME: why the labels image is always black?
+					// TODO: check if labels is equal to a Mat of all zeros.
+					cv::Mat tmp;
+					labels.convertTo(tmp, CV_8U, 1/256., 0);
+					stages.push_back(tmp);
 				}
 
 				{
@@ -677,10 +696,13 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			}
 			int predicted = hour*60 + minute;
 
-			static_assert(12*60 == 720, "bad math");
-			if (  ((predicted + 0) % 720       == labels[r])
-				| ((predicted + 1) % 720       == labels[r])
-				| ((predicted - 1 + 720) % 720 == labels[r])) {
+			CV_Assert(predicted >= 60);
+			CV_Assert(labels[r] >= 60);
+
+			static_assert(13*60 == 780, "bad math");
+			if (  ((predicted + 0)       % 780 == labels[r])
+				| ((predicted + 1)       % 780 == labels[r])
+				| ((predicted - 1 + 780) % 780 == labels[r])) {
 				++correct[thread_num];
 			} else {
 				cv::Mat viz = img.clone();
