@@ -131,6 +131,8 @@ explore_dataset(
 	}
 }
 
+// This struct can go wrong in so many ways... Almost none of them are checked.
+// So please be carefull when using it.
 struct Param {
 	enum struct Tag {
 		BOOL,
@@ -145,6 +147,7 @@ struct Param {
 		double d;
 		Val(bool b)   { this->b = b; }
 		Val(int i)    { this->i = i; }
+		// TODO: check for invalid numbers like nan and so on.
 		Val(float f)  { this->f = f; }
 		Val(double d) { this->d = d; }
 		Val() { this->d = 0.; }
@@ -156,6 +159,7 @@ struct Param {
 	Val step;
 	Val current;
 
+	// TODO: check that step does not cause any weird overflow.
 	bool can_grow() {
 		switch (tag) {
 		case Tag::BOOL:   return current.b == false;
@@ -185,6 +189,19 @@ struct Param {
 		default: CV_Error(cv::Error::Code::StsBadArg, "bad tag");
 		}
 	}
+
+	// Returning an int from here would require checking in advance that the
+	// operation performed does not overflow said integer.
+	int iterations_required() {
+		switch (tag) {
+		case Tag::BOOL:   return 2;
+		// There may be some -1 in this calculation
+		case Tag::INT:    return (max.i - min.i)/step.i;
+		case Tag::FLOAT:  return cvFloor((max.f - min.f)/step.f);
+		case Tag::DOUBLE: return  cvFloor((max.d - min.d)/step.d);
+		default: CV_Error(cv::Error::Code::StsBadArg, "bad tag");
+		}
+	}
 };
 
 std::ostream& operator <<(std::ostream& os, Param p) {
@@ -209,9 +226,12 @@ Param optimize_parameters(Param *params, int length) {
 	CV_Assert(params);
 	CV_Assert(length > 0);
 
+	long long tot = 1;
 	for (int i = 0; i < length; ++i) {
+		tot *= params[i].iterations_required()
 		params[i].init();
 	}
+	CV_LOG_INFO(NULL, "Parameter space size: " << tot);
 	Param best = params[0];
 
 	while (true) {
