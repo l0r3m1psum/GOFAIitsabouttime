@@ -38,6 +38,7 @@
 // no sixel support in Terminal.app :(
 
 #include "opencv2/core/softfloat.hpp"
+#include "opencv2/core/utils/logger.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc.hpp"
@@ -482,8 +483,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// image resolution (e.g. we can use a fixed bluring kernel instead
 			// of using one that grows with the size of the image). Also if an
 			// image is too small this gives us more pizels to work with.
+			cv::Size standardized_size(128, 128);
 			{
-				cv::Size standardized_size(128, 128);
 				double fx = 0, fy = 0;
 				cv::InterpolationFlags interpolation =
 					img.size().area() < standardized_size.area()
@@ -521,7 +522,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 
 				// We mask the image before the edge detection to minimize the
 				// number of edges that cound confuse the subsequent pahse.
-				{
+				if (true) {
 					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
 					cv::Point center = img.size()/2;
 					int radius = center.x/1.8;
@@ -550,7 +551,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				// At this point the edge detector always detects a circle
 				// arround the previous mask. We remove it by using a slightly
 				// smaller circular mask.
-				{
+				if (true) {
 					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
 					cv::Point center = img.size()/2;
 					int radius = center.x/1.8-1;
@@ -565,7 +566,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 
 				// TODO: maybe dilate the image a bit.
 
-				// TODO: find a way to remove the "small lines".
 				{
 					cv::Mat labels, stats, centroids;
 					int connectivity = 8, ltype = CV_16U, ccltype = cv::CCL_DEFAULT;
@@ -574,12 +574,51 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						connectivity, ltype, ccltype
 					);
 					CV_Assert(stats.rows == n_labels);
+					CV_Assert(stats.type() == CV_32S);
 					CV_Assert(centroids.rows == n_labels);
-					// FIXME: why the labels image is always black?
-					// TODO: check if labels is equal to a Mat of all zeros.
+					CV_Assert(centroids.type() == CV_64F);
+					CV_Assert(labels.type() == ltype);
+
+					// The first connected component should be the black
+					// background of the image, that has to be discarded.
+					int width = stats.at<int>(0, cv::CC_STAT_WIDTH);
+					int height = stats.at<int>(0, cv::CC_STAT_HEIGHT);
+					if (cv::Size(width, height) != standardized_size) {
+						CV_LOG_ERROR(NULL, "bad background???");
+						break;
+					}
+
+					// TODO: it would be cool to highlight just the "small"
+					// connected components.
+					cv::Mat mask = cv::Mat::zeros(standardized_size, CV_8UC1);
+					for (int i = 1; i < n_labels; ++i) {
+						if (stats.at<int>(i, cv::CC_STAT_AREA) >8*8)
+							continue;
+						cv::bitwise_or(labels == i, mask, mask);
+					}
+					cv::bitwise_not(mask, mask);
+					cv::bitwise_and(work_img, mask, work_img);
+
+					if (n_labels > 255) {
+						CV_LOG_ERROR(NULL, "too many connected components");
+						break;
+					}
 					cv::Mat tmp;
-					labels.convertTo(tmp, CV_8U, 1/256., 0);
-					stages.push_back(tmp);
+					labels.convertTo(tmp, CV_8UC1);
+
+					double min_generic = 0, max_generic = 0;
+					cv::minMaxLoc(tmp, &min_generic, &max_generic);
+					int max = (int) max_generic;
+					cv::Mat hue = tmp * 255/max;
+					cv::Mat saturation = (tmp > 0) * 255;
+					cv::Mat value = saturation;
+					cv::Mat color_tmp_chans[] = {hue, saturation, value};
+					cv::Mat color_tmp;
+					cv::merge(color_tmp_chans, 3, color_tmp);
+					cvtColor(color_tmp, color_tmp, cv::COLOR_HSV2BGR);
+
+					stages.push_back(color_tmp);
+					stages.push_back(work_img.clone());
 				}
 
 				{
@@ -697,12 +736,16 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			int predicted = hour*60 + minute;
 
 			CV_Assert(predicted >= 60);
+			CV_Assert(predicted <= 780);
 			CV_Assert(labels[r] >= 60);
+			CV_Assert(labels[r] <= 780);
 
 			static_assert(13*60 == 780, "bad math");
-			if (  ((predicted + 0)       % 780 == labels[r])
-				| ((predicted + 1)       % 780 == labels[r])
-				| ((predicted - 1 + 780) % 780 == labels[r])) {
+			static_assert(12*60 == 720, "bad math");
+			// Here we use modulus 720 and not 780 because the difference
+			// between predicted and label removes the quirks in the strange way
+			// that the dataset uses.
+			if (cv::cv_abs((predicted - labels[r]) % 720) <= 1) {
 				++correct[thread_num];
 			} else {
 				cv::Mat viz = img.clone();
@@ -733,6 +776,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 int
 main(int argc, char **argv) {
 	Timed_block b("all");
+	CV_LOG_INFO(NULL, "starting");
 
 	std::terminate_handler terminate_ = std::set_terminate([]() -> void {
 		std::exception_ptr ex = std::current_exception();
