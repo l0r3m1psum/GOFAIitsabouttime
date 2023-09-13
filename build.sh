@@ -16,18 +16,6 @@ clang++ \
 # (lldb) run
 # (lldb) p (* (cv::Exception *) $arg1).msg
 
-# clang++ \
-# 	-std=c++11 \
-# 	-glldb \
-# 	read_clock.cpp -o read_clock \
-# 	-I/Users/diegobellani/Downloads/opencv/install/include/opencv4 \
-# 	-L/Users/diegobellani/Downloads/opencv/install/lib \
-# 	-lopencv_core \
-# 	-lopencv_highgui \
-# 	-lopencv_imgcodecs \
-# 	-lopencv_imgproc \
-# && lldb -O "target create --no-dependents read_clock"
-
 # pkg-config --cflags --libs opencv4
 # -I/usr/local/opt/opencv/include/opencv4
 # -L/usr/local/opt/opencv/lib
