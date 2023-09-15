@@ -2,13 +2,12 @@ clang++ \
 	-std=c++11 \
 	-glldb \
 	main.cpp -o main \
-	-I/Users/diegobellani/Downloads/opencv/install/include/opencv4 \
-	-L/Users/diegobellani/Downloads/opencv/install/lib \
+	-I ~/local/src/opencv/install/include/opencv4 \
+	-L ~/local/src/opencv/install/lib \
 	-lopencv_core \
 	-lopencv_highgui \
 	-lopencv_imgcodecs \
 	-lopencv_imgproc
-# && lldb -O "target create --no-dependents main"
 
 # (lldb) command alias compile platform shell build.sh
 # (lldb) compile

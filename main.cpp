@@ -454,13 +454,35 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 	const std::vector<int16_t>& labels;
 	std::vector<Size> &correct;
 	std::vector<Size> &skipped;
+	// parameters
+	int mask_radius_scale;
+	double canny_threshold1;
+	double canny_threshold2;
+	int connected_component_area;
+	int hough_lines_threshold;
+	double hough_lines_minLineLength;
+	double hough_lines_maxLineGap;
 
 	ParallelClassification(
 		const std::vector<cv::Mat>& imgs,
 		const std::vector<int16_t>& labels,
 		std::vector<Size> &correct,
-		std::vector<Size> &skipped
-	) : imgs(imgs), labels(labels), correct(correct), skipped(skipped) {
+		std::vector<Size> &skipped,
+		int mask_radius_scale,
+		double canny_threshold1,
+		double canny_threshold2,
+		int connected_component_area,
+		int hough_lines_threshold,
+		double hough_lines_minLineLength,
+		double hough_lines_maxLineGap
+	) : imgs(imgs), labels(labels), correct(correct), skipped(skipped),
+		mask_radius_scale(mask_radius_scale),
+		canny_threshold1(canny_threshold1),
+		canny_threshold2(canny_threshold2),
+		connected_component_area(connected_component_area),
+		hough_lines_threshold(hough_lines_threshold),
+		hough_lines_minLineLength(hough_lines_minLineLength),
+		hough_lines_maxLineGap(hough_lines_maxLineGap) {
 		CV_Assert(imgs.size() == labels.size());
 		CV_Assert(correct.size() == skipped.size());
 		CV_Assert(skipped.size() == cv::getNumThreads());
@@ -525,7 +547,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				if (true) {
 					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
 					cv::Point center = img.size()/2;
-					int radius = center.x/1.8;
+					// int radius = center.x/1.8; // 128/1.8 = 71
+					int radius = mask_radius_scale;
 					cv::Scalar white(0xff, 0xff, 0xff);
 					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
 					cv::circle(mask, center, radius, white, thickness, lineType, shift);
@@ -537,8 +560,9 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 
 				// https://cvexplained.wordpress.com/tag/canny-edge-detector/
 				{
-					double threshold1 = A(double, 80, 40, 20)[attempt],
-						threshold2 = A(double, 200, 100, 80)[attempt];
+					double threshold1 = A(double, canny_threshold1, canny_threshold1/2, canny_threshold1/4)[attempt],
+						threshold2 = A(double, canny_threshold2, canny_threshold2/2, canny_threshold2/4)[attempt];
+					// NOTE: should I optimize this two too?
 					int apertureSize = 3;
 					bool L2gradient = true;
 					cv::Canny(copyTo(work_img, copied), work_img, threshold1,
@@ -554,7 +578,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				if (true) {
 					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
 					cv::Point center = img.size()/2;
-					int radius = center.x/1.8-1;
+					// int radius = center.x/1.8-1;
+					int radius = mask_radius_scale-1;
 					cv::Scalar white(0xff, 0xff, 0xff);
 					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
 					cv::circle(mask, center, radius, white, thickness, lineType, shift);
@@ -592,7 +617,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					// connected components.
 					cv::Mat mask = cv::Mat::zeros(standardized_size, CV_8UC1);
 					for (int i = 1; i < n_labels; ++i) {
-						if (stats.at<int>(i, cv::CC_STAT_AREA) >8*8)
+						int area = connected_component_area;
+						if (stats.at<int>(i, cv::CC_STAT_AREA) > connected_component_area)
 							continue;
 						cv::bitwise_or(labels == i, mask, mask);
 					}
@@ -622,11 +648,13 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				}
 
 				{
+					// NOTE: should I optimize this two too?
 					double rho = 1, theta = 1 * CV_PI / 180;
 					// Since most images are small and noisy this parameters need
 					// to be low.
-					int threshold = 15;
-					double minLineLenght = 10, maxLineGap = 100;
+					int threshold = hough_lines_threshold;
+					double minLineLenght = hough_lines_minLineLength,
+						maxLineGap = hough_lines_maxLineGap;
 					cv::HoughLinesP(work_img, lines, rho, theta, threshold,
 						minLineLenght, maxLineGap);
 					if (lines.rows >= 2) {
@@ -772,6 +800,150 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 	}
 };
 
+
+#pragma mark Optimizer
+
+// We increment start by step until it is less then stop.
+struct Param {
+	enum struct Tag {INT, LONG, FLOAT, DOUBLE,};
+	union Val {
+		int i; long l; float f; double d;
+		Val(int value)    : i(value) {}
+		Val(long value)   : l(value) {}
+		Val(float value)  : f(value) {}
+		Val(double value) : d(value) {}
+	};
+
+	Tag tag;
+	Val start;
+	Val stop;
+	Val step;
+	Val current;
+
+	Param(int start, int stop, int step)
+		: tag(Param::Tag::INT),    start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
+	Param(long start, long stop, long step)
+		: tag(Param::Tag::LONG),   start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
+	Param(float start, float stop, float step)
+		: tag(Param::Tag::FLOAT),  start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
+	Param(double start, double stop, double step)
+		: tag(Param::Tag::DOUBLE), start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
+
+	template<typename T>
+	bool check_invariant(T start, T stop, T step, T current) {
+		if (step == 0) {
+			return false;
+		} else if (step > 0) {
+			return start < stop && current < stop;
+		} else /* step < 0 */ {
+			return start > stop && current > stop;
+		}
+	}
+
+	bool invariant() {
+		switch (tag) {
+		case Tag::INT:    return check_invariant(start.i, stop.i, step.i, current.i);
+		case Tag::LONG:   return check_invariant(start.l, stop.l, step.l, current.l);
+		case Tag::FLOAT:  return check_invariant(start.f, stop.f, step.f, current.f);
+		case Tag::DOUBLE: return check_invariant(start.d, stop.d, step.d, current.d);
+		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
+	}
+
+	void reset() {
+		CV_Assert(invariant());
+		switch (tag) {
+		case Tag::INT:    current.i = start.i; return;
+		case Tag::LONG:   current.l = start.l; return;
+		case Tag::FLOAT:  current.f = start.f; return;
+		case Tag::DOUBLE: current.d = start.d; return;
+		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
+	}
+
+	void next() {
+		CV_Assert(invariant());
+		CV_Assert(has_next());
+		switch (tag) {
+		case Tag::INT:    current.i += step.i; return;
+		case Tag::LONG:   current.l += step.l; return;
+		case Tag::FLOAT:  current.f += step.f; return;
+		case Tag::DOUBLE: current.d += step.d; return;
+		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
+	}
+
+	template<typename T>
+	bool check_has_next(T a, T b, T c) {
+		using limits = std::numeric_limits<T>;
+		// a + b > limits::max()
+		if (b > 0 && a > limits::max() - b) {
+			return false;
+		}
+		// a + b < limits::min()
+		if (b < 0 && a < limits::min() - b) {
+			return false;
+		}
+		// Now we can do the test safely.
+		return b > 0 ? a + b < c : a + b > c;
+	}
+
+	bool has_next() {
+		CV_Assert(invariant());
+		// https://stackoverflow.com/a/1514309
+		// if b == 0 overflow/underflow can't happen.
+		switch (tag) {
+		case Tag::INT:    return check_has_next(current.i, step.i, stop.i);
+		case Tag::LONG:   return check_has_next(current.l, step.l, stop.l);
+		case Tag::FLOAT:  return check_has_next(current.f, step.f, stop.f);
+		case Tag::DOUBLE: return check_has_next(current.d, step.d, stop.d);
+		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
+	}
+
+#if 0
+	unsigned size() {
+		switch (tag) {
+		case Tag::INT:    return (stop.i - start.i)/step.i; // division may cause UB for -1
+		case Tag::LONG:   return (stop.l - start.l)/step.l;
+		// option 1: saturate for out of range numbers https://stackoverflow.com/a/2545218
+		// option 2: float ULP distance (or even better distance not based on step)
+		if step < ulp
+			return ulp_dist(stop-start)
+		else
+			// questo scaling è mantiene la correttezza che mi serve???
+			// no perche se step = 0.1 il la distanza si ingrandisce e potrebbe
+			// andare a inf
+			// what about absorption and catastrophic cancellation???
+			return ulp_dist((stop-start)/step);
+		case Tag::FLOAT:  return (stop.f - start.f)/step.f;
+		case Tag::DOUBLE: return (stop.d - start.d)/step.d;
+		}
+	}
+#endif
+};
+
+struct ParamIter {
+	Param *params;
+	unsigned length;
+	bool finished;
+
+	void next() {
+		unsigned j = 0;
+		while (j < length && !params[j].has_next()) {
+			params[j].reset();
+			j++;
+		}
+		if (j == length) {
+			finished = true;
+			return;
+		}
+		params[j].next();
+	}
+};
+
+#pragma mark Main
+
 // br set -X main -p return
 int
 main(int argc, char **argv) {
@@ -883,24 +1055,87 @@ main(int argc, char **argv) {
 
 	// cv::setNumThreads(1);
 
-	size_t tot_correct = 0, tot_skipped = 0;
-	std::vector<ParallelClassification::Size> correct(num_threads),
-		skipped(num_threads);
-	{
-		Timed_block b("classification");
-		ParallelClassification classifier(imgs, labels, correct, skipped);
-		cv::parallel_for_(cv::Range(0, dataset_size), classifier);
-	}
-	for (auto n : correct) {
-		tot_correct += n.size;
-	}
-	for (auto n : skipped) {
-		tot_skipped += n.size;
+	Param params[] {
+		// mask_radius_scale
+		// {70, 73, 1}, // 71
+		{34, 37, 1}, //35
+		// canny_threshold1
+		{79., 82., 1.}, // 80
+		// canny_threshold2
+		{199., 202., 1.}, // 200
+		// connected_component_area
+		{8*8-1, 8*8+2, 1}, // 8*8
+		// hough_lines_rho
+		/* ignored for now */
+		// hough_lines_theta
+		/* ignored for now */
+		// hough_lines_threshold
+		{14, 17, 1}, // 15
+		// hough_lines_minLineLength
+		{9., 12., 1.}, // 10
+		// hough_lines_maxLineGap
+		{99., 102., 2.}, // 100
+	};
+	constexpr size_t params_length = sizeof params / sizeof *params;
+
+	float best_score = 0;
+	// 35 79 201 63 14 10 99
+	Param best_params[params_length] = {
+		{0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1},
+	};
+	for (ParamIter it = {params, params_length, false};
+			!it.finished;
+			it.next()) {
+		// we clear the stuff from the previous execution.
+		skipped_imgs.mats.clear();
+		wrong_imgs.mats.clear();
+		size_t tot_correct = 0, tot_skipped = 0;
+		std::vector<ParallelClassification::Size> correct(num_threads),
+			skipped(num_threads);
+		{
+			Timed_block b("classification");
+			// TODO: pass parameters as argument to the classifier.
+			ParallelClassification classifier(imgs, labels, correct, skipped,
+				it.params[0].current.i,
+				it.params[1].current.d,
+				it.params[2].current.d,
+				it.params[3].current.i,
+				it.params[4].current.i,
+				it.params[5].current.d,
+				it.params[6].current.d
+			);
+			cv::parallel_for_(cv::Range(0, dataset_size), classifier);
+		}
+		for (auto n : correct) {
+			tot_correct += n.size;
+		}
+		for (auto n : skipped) {
+			tot_skipped += n.size;
+		}
+
+		float score = (float) tot_correct / dataset_size;
+		std::cout
+			<< "correct: " << score << '\n'
+			<< "skipped: " << (float) tot_skipped / dataset_size << '\n';
+		if (score > best_score) {
+			std::cout << "**** best: " << score << '\n';
+			best_score = score;
+			for (unsigned i = 0; i < it.length; ++i) {
+				best_params[i] = it.params[i];
+			}
+		}
 	}
 
-	std::cout
-		<< "correct: " << (float) tot_correct / dataset_size << '\n'
-		<< "skipped: " << (float) tot_skipped / dataset_size << '\n';
+	std::cout << "best score: " << best_score << '\n';
+	for (unsigned i = 0; i < params_length; ++i) {
+		switch (best_params[i].tag) {
+		case Param::Tag::INT: std::cout << best_params[i].current.i << ' '; break;
+		case Param::Tag::LONG: std::cout << best_params[i].current.l << ' '; break;
+		case Param::Tag::FLOAT: std::cout << best_params[i].current.f << ' '; break;
+		case Param::Tag::DOUBLE: std::cout << best_params[i].current.d << ' '; break;
+		}
+	}
+	std::cout << '\n';
 
 	// (void) cv::startWindowThread();
 	cv::String window_name = "skipped";
