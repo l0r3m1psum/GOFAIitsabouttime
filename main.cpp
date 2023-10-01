@@ -1055,6 +1055,36 @@ main(int argc, char **argv) {
 
 	// cv::setNumThreads(1);
 
+	size_t tot_correct = 0, tot_skipped = 0;
+	std::vector<ParallelClassification::Size> correct(num_threads),
+		skipped(num_threads);
+	{
+		Timed_block b("classification");
+		ParallelClassification classifier(imgs, labels, correct, skipped,
+			35, 79, 201, 63, 14, 10, 99
+		);
+		cv::parallel_for_(cv::Range(0, dataset_size), classifier);
+	}
+	for (auto n : correct) {
+		tot_correct += n.size;
+	}
+	for (auto n : skipped) {
+		tot_skipped += n.size;
+	}
+
+	float score = (float) tot_correct / dataset_size;
+	std::cout
+		<< "correct: " << score << '\n'
+		<< "skipped: " << (float) tot_skipped / dataset_size << '\n';
+
+	// (void) cv::startWindowThread();
+	cv::String window_name = "skipped";
+	// explore_dataset(window_name, skipped_imgs.mats);
+	window_name = "misclassified";
+	explore_dataset(window_name, wrong_imgs.mats);
+
+	return static_cast<int>(retCode::OK);
+
 	Param params[] {
 		// mask_radius_scale
 		// {70, 73, 1}, // 71
@@ -1094,7 +1124,6 @@ main(int argc, char **argv) {
 			skipped(num_threads);
 		{
 			Timed_block b("classification");
-			// TODO: pass parameters as argument to the classifier.
 			ParallelClassification classifier(imgs, labels, correct, skipped,
 				it.params[0].current.i,
 				it.params[1].current.d,
@@ -1138,7 +1167,6 @@ main(int argc, char **argv) {
 	std::cout << '\n';
 
 	// (void) cv::startWindowThread();
-	cv::String window_name = "skipped";
 	// explore_dataset(window_name, skipped_imgs.mats);
 	window_name = "misclassified";
 	explore_dataset(window_name, wrong_imgs.mats);
