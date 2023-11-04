@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.12)
+project(AnalogClock)
+
+set(CMAKE_CXX_STANDARD 11)
+
+# pkg-config --cflags --libs opencv4 # to lisk all the linkable libraries
+add_compile_definitions(HAVE_OPENMP)
+include_directories("~/local/include/opencv4")
+link_directories("~/local/lib")
+
+add_executable(main "main.cpp")
+target_link_libraries(main opencv_core opencv_imgcodecs opencv_imgproc)
+# Can I use set_property to do this globally?
+set_target_properties(main PROPERTIES
+	XCODE_GENERATE_SCHEME TRUE
+    XCODE_SCHEME_WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    
+add_library(algorithm SHARED "algorithm.cpp")
+target_link_libraries(algorithm opencv_core opencv_highgui opencv_imgproc)
+
+add_executable(mat_allocator "mat_allocator.cpp")
+target_link_libraries(mat_allocator opencv_core)
+
+# (lldb) command alias compile platform shell build.sh
+# (lldb) compile
+# (lldb) target create main
+# (lldb) run
+# (lldb) p (* (cv::Exception *) $arg1).msg
