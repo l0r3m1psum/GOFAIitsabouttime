@@ -8,15 +8,16 @@ add_compile_definitions(HAVE_OPENMP)
 include_directories("~/local/include/opencv4")
 link_directories("~/local/lib")
 
+add_library(algorithm SHARED "algorithm.cpp")
+target_link_libraries(algorithm opencv_core opencv_highgui opencv_imgproc)
+
 add_executable(main "main.cpp")
 target_link_libraries(main opencv_core opencv_imgcodecs opencv_imgproc)
+add_dependencies(main algorithm)
 # Can I use set_property to do this globally?
 set_target_properties(main PROPERTIES
 	XCODE_GENERATE_SCHEME TRUE
     XCODE_SCHEME_WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    
-add_library(algorithm SHARED "algorithm.cpp")
-target_link_libraries(algorithm opencv_core opencv_highgui opencv_imgproc)
 
 add_executable(mat_allocator "mat_allocator.cpp")
 target_link_libraries(mat_allocator opencv_core)
