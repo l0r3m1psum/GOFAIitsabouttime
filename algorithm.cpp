@@ -5,6 +5,7 @@
 #define BREAKPOINT __builtin_debugtrap()
 // An dereferentiable array litteral.
 #define A(T, ...) (std::initializer_list<T>({__VA_ARGS__}).begin())
+// template<typename T> using alias = T; // TODO: use this instead.
 
 // $ sysctl hw.cachelinesize
 // hw.cachelinesize: 64
@@ -283,11 +284,10 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						break;
 					}
 
-					// TODO: it would be cool to highlight just the "small"
-					// connected components.
+					// TODO: a questo punto devo usare la corona circolare...
+					// We remove all the "small" connected components.
 					cv::Mat mask = cv::Mat::zeros(standardized_size, CV_8UC1);
 					for (int i = 1; i < n_labels; ++i) {
-						int area = connected_component_area;
 						if (stats.at<int>(i, cv::CC_STAT_AREA) > connected_component_area)
 							continue;
 						cv::bitwise_or(labels == i, mask, mask);
@@ -316,11 +316,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					stages.push_back(color_tmp);
 					stages.push_back(work_img.clone());
 				}
-				
-				// TODO: provare la tecnica dei cerchi concentrici.
-				// Creare una maschera con questo e poi constare quanti pixel di
-				// una certa componenete cossessa sono al suo interno.
-				// https://docs.opencv.org/4.8.0/d6/d6e/group__imgproc__draw.html#gaf10604b069374903dbd0f0488cb43670
 
 				{
 					// NOTE: should I optimize this two too?
@@ -675,6 +670,7 @@ run_classifier(bool debug, void *imgs_, void *labels_) {
 
 	cv::String window_name = "misclassified";
 	return explore_dataset(window_name, wrong_imgs.mats);
-	// TODO: free skipped_imgs.mats and wrong_imgs.mats
+	// TODO: free skipped_imgs.mats and wrong_imgs.mats because if we reload to
+	// many times we might run out of memory.
 }
 }
