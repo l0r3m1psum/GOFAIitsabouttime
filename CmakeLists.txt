@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.12)
 project(AnalogClock)
 
 set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # pkg-config --cflags --libs opencv4 # to lisk all the linkable libraries
 add_compile_definitions(HAVE_OPENMP)
@@ -21,10 +22,7 @@ set_target_properties(main PROPERTIES XCODE_GENERATE_SCHEME TRUE
 
 add_executable(mat_allocator "mat_allocator.cpp")
 target_link_libraries(mat_allocator opencv_core)
-
-add_executable(mask "mask.cpp")
-target_link_libraries(mat_allocator opencv_core opecv_highgui)
-set_target_properties(mask PROPERTIES XCODE_GENERATE_SCHEME TRUE)
+set_target_properties(mat_allocator PROPERTIES XCODE_GENERATE_SCHEME TRUE)
 
 # (lldb) command alias compile platform shell build.sh
 # (lldb) compile

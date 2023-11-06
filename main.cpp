@@ -212,167 +212,6 @@ struct ParallelRead CV_FINAL : public cv::ParallelLoopBody {
 	}
 };
 
-#pragma mark Optimizer
-
-// Cool but unused templates.
-template<unsigned N, typename T, typename... Ts>
-struct type_switch {
-	using type = typename type_switch<N - 1, Ts...>::type;
-};
-template<typename T, typename... Ts>
-struct type_switch<0, T, Ts...> {
-	using type = T;
-};
-
-// We increment start by step until it is less then stop.
-struct Param {
-	enum struct Tag {INT, LONG, FLOAT, DOUBLE,};
-	union Val {
-		int i; long l; float f; double d;
-		Val(int value)    : i(value) {}
-		Val(long value)   : l(value) {}
-		Val(float value)  : f(value) {}
-		Val(double value) : d(value) {}
-	};
-
-	Tag tag;
-	Val start;
-	Val stop;
-	Val step;
-	Val current;
-
-	Param(int start, int stop, int step)
-		: tag(Param::Tag::INT),    start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
-	Param(long start, long stop, long step)
-		: tag(Param::Tag::LONG),   start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
-	Param(float start, float stop, float step)
-		: tag(Param::Tag::FLOAT),  start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
-	Param(double start, double stop, double step)
-		: tag(Param::Tag::DOUBLE), start(start), stop(stop), step(step), current(start) {CV_Assert(invariant());}
-
-	template<typename T>
-	bool check_invariant(T start, T stop, T step, T current) {
-		if (step == 0) {
-			return false;
-		} else if (step > 0) {
-			return start < stop && current < stop;
-		} else /* step < 0 */ {
-			return start > stop && current > stop;
-		}
-	}
-
-	bool invariant() {
-		switch (tag) {
-		case Tag::INT:    return check_invariant(start.i, stop.i, step.i, current.i);
-		case Tag::LONG:   return check_invariant(start.l, stop.l, step.l, current.l);
-		case Tag::FLOAT:  return check_invariant(start.f, stop.f, step.f, current.f);
-		case Tag::DOUBLE: return check_invariant(start.d, stop.d, step.d, current.d);
-		}
-		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
-	}
-
-	void reset() {
-		CV_Assert(invariant());
-		switch (tag) {
-		case Tag::INT:    current.i = start.i; return;
-		case Tag::LONG:   current.l = start.l; return;
-		case Tag::FLOAT:  current.f = start.f; return;
-		case Tag::DOUBLE: current.d = start.d; return;
-		}
-		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
-	}
-
-	void next() {
-		CV_Assert(invariant());
-		CV_Assert(has_next());
-		switch (tag) {
-		case Tag::INT:    current.i += step.i; return;
-		case Tag::LONG:   current.l += step.l; return;
-		case Tag::FLOAT:  current.f += step.f; return;
-		case Tag::DOUBLE: current.d += step.d; return;
-		}
-		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
-	}
-
-	template<typename T>
-	bool check_has_next(T a, T b, T c) {
-		using limits = std::numeric_limits<T>;
-		// a + b > limits::max()
-		if (b > 0 && a > limits::max() - b) {
-			return false;
-		}
-		// a + b < limits::min()
-		if (b < 0 && a < limits::min() - b) {
-			return false;
-		}
-		// Now we can do the test safely.
-		return b > 0 ? a + b < c : a + b > c;
-	}
-
-	bool has_next() {
-		CV_Assert(invariant());
-		// https://stackoverflow.com/a/1514309
-		// if b == 0 overflow/underflow can't happen.
-		switch (tag) {
-		case Tag::INT:    return check_has_next(current.i, step.i, stop.i);
-		case Tag::LONG:   return check_has_next(current.l, step.l, stop.l);
-		case Tag::FLOAT:  return check_has_next(current.f, step.f, stop.f);
-		case Tag::DOUBLE: return check_has_next(current.d, step.d, stop.d);
-		}
-		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
-	}
-
-#if 0
-	unsigned size() {
-		switch (tag) {
-		case Tag::INT:    return (stop.i - start.i)/step.i; // division may cause UB for -1
-		case Tag::LONG:   return (stop.l - start.l)/step.l;
-		// option 1: saturate for out of range numbers https://stackoverflow.com/a/2545218
-		// option 2: float ULP distance (or even better distance not based on step)
-		if step < ulp
-			return ulp_dist(stop-start)
-		else
-			// questo scaling è mantiene la correttezza che mi serve???
-			// no perche se step = 0.1 il la distanza si ingrandisce e potrebbe
-			// andare a inf
-			// what about absorption and catastrophic cancellation???
-			return ulp_dist((stop-start)/step);
-		case Tag::FLOAT:  return (stop.f - start.f)/step.f;
-		case Tag::DOUBLE: return (stop.d - start.d)/step.d;
-		}
-	}
-#endif
-};
-
-std::ostream& operator <<(std::ostream& os, Param p) {
-	switch (p.tag) {
-	case Param::Tag::INT:    return os << p.current.i;
-	case Param::Tag::LONG:   return os << p.current.l;
-	case Param::Tag::FLOAT:  return os << p.current.f;
-	case Param::Tag::DOUBLE: return os << p.current.d;
-	}
-	CV_Error(cv::Error::Code::StsBadArg, "bad tag");
-}
-
-struct ParamIter {
-	Param *params;
-	unsigned length;
-	bool finished;
-
-	void next() {
-		unsigned j = 0;
-		while (j < length && !params[j].has_next()) {
-			params[j].reset();
-			j++;
-		}
-		if (j == length) {
-			finished = true;
-			return;
-		}
-		params[j].next();
-	}
-};
-
 #pragma mark Entry Point
 
 void terminate_handler() {
@@ -423,7 +262,6 @@ int main() {
 	imgs.shrink_to_fit();
 	labels.shrink_to_fit();
 	
-	bool debug = true; // TODO: this should be passed from the command line.
 	while (true) {
 		void* module = dlopen("build/Debug/libalgorithm.dylib", RTLD_NOW);
 		if (module == NULL) {
@@ -435,80 +273,13 @@ int main() {
 			CV_LOG_FATAL(NULL, dlerror());
 			return cv::Error::StsBadArg;
 		}
-		if (!run_classifier(debug, (void *)&imgs, (void *)&labels)) {
+		if (!run_classifier((void *)&ids, (void *)&imgs, (void *)&labels)) {
 			break;
 		}
 		if (dlclose(module) == -1) {
 			CV_LOG_FATAL(NULL, dlerror());
 			return cv::Error::StsError;
 		}
-	}
-	
-	if (false) {
-		Param params[] {
-			// mask_radius_scale
-			// {70, 73, 1}, // 71
-			{34, 37, 1}, //35
-			// canny_threshold1
-			{79., 82., 1.}, // 80
-			// canny_threshold2
-			{199., 202., 1.}, // 200
-			// connected_component_area
-			{8*8-1, 8*8+2, 1}, // 8*8
-			// hough_lines_rho
-			/* ignored for now */
-			// hough_lines_theta
-			/* ignored for now */
-			// hough_lines_threshold
-			{14, 17, 1}, // 15
-			// hough_lines_minLineLength
-			{9., 12., 1.}, // 10
-			// hough_lines_maxLineGap
-			{99., 102., 2.}, // 100
-		};
-		constexpr size_t params_length = sizeof params / sizeof *params;
-
-		float best_score = 0;
-		// 35 79 201 63 14 10 99
-		Param best_params[params_length] = {
-			{0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1},
-		};
-		for (ParamIter it = {params, params_length, false};
-				!it.finished;
-				it.next()) {
-			// we clear the stuff from the previous execution.
-			size_t tot_correct = 0, tot_skipped = 0;
-			// TODO: enrich the api to enable this usecase.
-			{
-//				ParallelClassification classifier(imgs, labels, correct, skipped,
-//					it.params[0].current.i,
-//					it.params[1].current.d,
-//					it.params[2].current.d,
-//					it.params[3].current.i,
-//					it.params[4].current.i,
-//					it.params[5].current.d,
-//					it.params[6].current.d
-//				);
-//				cv::parallel_for_(cv::Range(0, dataset_size), classifier);
-			}
-			float score = .5;
-			std::cout
-				<< "correct: " << score << '\n'
-				<< "skipped: " << (float) tot_skipped / imgs.size() << '\n';
-			if (score > best_score) {
-				std::cout << "**** best: " << score << '\n';
-				best_score = score;
-				std::copy(it.params, it.params + it.length, best_params);
-			}
-		}
-
-		std::cout << "best score: " << best_score << '\n';
-		for (unsigned i = 0; i < params_length; ++i) {
-			std::cout << best_params[i] << ' ';
-		}
-		std::cout << '\n';
-
-		return 0;
 	}
 
 	return 0;

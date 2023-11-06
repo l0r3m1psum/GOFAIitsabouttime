@@ -166,6 +166,23 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 		cv::theRNG().state = seed;
 		cv::setRNGSeed(seed);
 		cv::Mat copied; // For temporary copies needed by the various filters.
+		cv::Size standardized_size(128, 128);
+		cv::Mat annulus_mask(standardized_size, CV_8UC1, cv::Scalar(0));
+		{
+			// If you torture it enough...
+			cv::Mat img; cv::Point center; cv::Scalar color; cv::LineTypes lineType;
+			int radius, thickness, shift;
+			
+			cv::Mat outer_circle = annulus_mask.clone();
+			outer_circle = 255;
+			cv::Mat inner_circle = annulus_mask.clone();
+			// TODO: this radius has to be changed.
+			cv::circle(img = inner_circle, center = standardized_size/2,
+					   radius = center.x/2, color = cv::Scalar(255), thickness = -1,
+					   lineType = cv::LINE_8, shift = 0);
+			
+			cv::subtract(outer_circle, inner_circle, annulus_mask);
+		}
 		for (int r = range.start; r < range.end; ++r) {
 			std::vector<cv::Mat> stages; // Records the transformation stages for debugging.
 			int thread_num = cv::getThreadNum();
@@ -178,7 +195,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// image resolution (e.g. we can use a fixed bluring kernel instead
 			// of using one that grows with the size of the image). Also if an
 			// image is too small this gives us more pizels to work with.
-			cv::Size standardized_size(128, 128);
 			{
 				double fx = 0, fy = 0;
 				cv::InterpolationFlags interpolation =
@@ -215,22 +231,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					stages.push_back(work_img.clone());
 				}
 
-				// We mask the image before the edge detection to minimize the
-				// number of edges that cound confuse the subsequent pahse.
-				if (true) {
-					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
-					cv::Point center = img.size()/2;
-					// int radius = center.x/1.8; // 128/1.8 = 71
-					int radius = mask_radius_scale;
-					cv::Scalar white(0xff, 0xff, 0xff);
-					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
-					cv::circle(mask, center, radius, white, thickness, lineType, shift);
-					cv::bitwise_and(copyTo(work_img, copied), mask, work_img);
-					CV_Assert(work_img.size() == img.size());
-					CV_Assert(work_img.type() == CV_8UC1);
-					stages.push_back(work_img.clone());
-				}
-
 				// https://cvexplained.wordpress.com/tag/canny-edge-detector/
 				{
 					double threshold1 = A(double, canny_threshold1, canny_threshold1/2, canny_threshold1/4)[attempt],
@@ -242,24 +242,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						threshold2, apertureSize, L2gradient);
 					CV_Assert(work_img.size() == img.size());
 					CV_Assert(work_img.type() == CV_8UC1);
-					stages.push_back(work_img.clone());
-				}
-
-				// At this point the edge detector always detects a circle
-				// arround the previous mask. We remove it by using a slightly
-				// smaller circular mask.
-				if (true) {
-					cv::Mat mask = cv::Mat::zeros(img.size(), CV_8UC1);
-					cv::Point center = img.size()/2;
-					// int radius = center.x/1.8-1;
-					int radius = mask_radius_scale-1;
-					cv::Scalar white(0xff, 0xff, 0xff);
-					int thickness = cv::FILLED, lineType = cv::LINE_8, shift = 0;
-					cv::circle(mask, center, radius, white, thickness, lineType, shift);
-					cv::bitwise_and(copyTo(work_img, copied), mask, work_img);
-					CV_Assert(work_img.size() == img.size());
-					CV_Assert(work_img.type() == CV_8UC1);
-					stages.push_back(work_img.clone());
 				}
 
 				{
@@ -283,10 +265,37 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						CV_LOG_ERROR(NULL, "bad background???");
 						break;
 					}
+					
+					// If the number of connected components is greater than the
+					// possible hue values we treat this as an error. Even if
+					// this is not technically an error the number of connected
+					// components is still way too high for this kind of image.
+					// NOTE: this chould be a feedback point.
+					if (n_labels > 255) {
+						CV_LOG_ERROR(NULL, "too many connected components");
+						break;
+					}
+					
+					// We create the visualization for debugging.
+					{
+						cv::Mat tmp;
+						labels.convertTo(tmp, CV_8UC1);
+						double min_generic = 0, max_generic = 0;
+						cv::minMaxLoc(tmp, &min_generic, &max_generic);
+						int max = (int) max_generic;
+						cv::Mat hue = tmp * 255/max;
+						cv::Mat saturation = (tmp > 0) * 255;
+						cv::Mat value = saturation;
+						cv::Mat color_tmp_chans[] = {hue, saturation, value};
+						cv::Mat color_tmp;
+						cv::merge(color_tmp_chans, 3, color_tmp);
+						cvtColor(color_tmp, color_tmp, cv::COLOR_HSV2BGR);
+						stages.push_back(color_tmp);
+					}
 
-					// TODO: a questo punto devo usare la corona circolare...
-					// We remove all the "small" connected components.
 					cv::Mat mask = cv::Mat::zeros(standardized_size, CV_8UC1);
+#if 0
+					// We remove all the "small" connected components.
 					for (int i = 1; i < n_labels; ++i) {
 						if (stats.at<int>(i, cv::CC_STAT_AREA) > connected_component_area)
 							continue;
@@ -294,31 +303,30 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					}
 					cv::bitwise_not(mask, mask);
 					cv::bitwise_and(work_img, mask, work_img);
-
-					if (n_labels > 255) {
-						CV_LOG_ERROR(NULL, "too many connected components");
-						break;
+#endif
+					
+					stages.push_back(annulus_mask);
+#if 1
+					mask = cv::Mat::zeros(standardized_size, CV_8UC1);
+					for (int i = 1; i < n_labels; ++i) {
+						cv::Mat intersection(standardized_size, CV_8UC1, cv::Scalar(0));
+						cv::Mat filtered = labels == i;
+						cv::bitwise_and(filtered, annulus_mask, intersection);
+						float percentage_covered = (float) cv::countNonZero(intersection)
+							/ cv::countNonZero(filtered);
+						if (percentage_covered > .5) {
+							cv::bitwise_or(filtered, mask, mask);
+						}
 					}
-					cv::Mat tmp;
-					labels.convertTo(tmp, CV_8UC1);
+					stages.push_back(mask);
+					cv::bitwise_not(mask, mask);
+					cv::bitwise_and(work_img, mask, work_img);
+#endif
 
-					double min_generic = 0, max_generic = 0;
-					cv::minMaxLoc(tmp, &min_generic, &max_generic);
-					int max = (int) max_generic;
-					cv::Mat hue = tmp * 255/max;
-					cv::Mat saturation = (tmp > 0) * 255;
-					cv::Mat value = saturation;
-					cv::Mat color_tmp_chans[] = {hue, saturation, value};
-					cv::Mat color_tmp;
-					cv::merge(color_tmp_chans, 3, color_tmp);
-					cvtColor(color_tmp, color_tmp, cv::COLOR_HSV2BGR);
-
-					stages.push_back(color_tmp);
 					stages.push_back(work_img.clone());
 				}
 
 				{
-					// NOTE: should I optimize this two too?
 					double rho = 1, theta = 1 * CV_PI / 180;
 					// Since most images are small and noisy this parameters need
 					// to be low.
@@ -408,6 +416,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			if (line_length(intersec, hour_p1) > line_length(intersec, hour_p2)) {
 				cv::swap(hour_p1, hour_p2);
 			}
+			// min_p1 = hour_p1 = intersec;
 			// cv::fastAtan2 returns degrees not radiants.
 			float min_angle = cv::fastAtan2((-min_p2.y) - (-min_p1.y), min_p2.x - min_p1.x);
 			float hour_angle = cv::fastAtan2((-hour_p2.y) - (-hour_p1.y), hour_p2.x - hour_p1.x);
@@ -459,12 +468,12 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				}
 				cv::arrowedLine(viz, min_p1, min_p2, green);
 				cv::arrowedLine(viz, hour_p1, hour_p2, green);
-				cv::String predicted_text = cv::format("%d:%d", hour, minute);
-				putText(viz, predicted_text, cv::Point(10,40));
+				cv::String predicted_text = cv::format("pred:  %d:%d", hour, minute);
+				putText(viz, predicted_text, cv::Point(5,20));
 				int label_hour = labels[r]/60;
 				int label_min = labels[r]%60;
-				cv::String label_text = cv::format("%d:%d", label_hour, label_min);
-				putText(viz, label_text, cv::Point(10, 80));
+				cv::String label_text = cv::format("label: %d:%d", label_hour, label_min);
+				putText(viz, label_text, cv::Point(5, 110));
 				cv::drawMarker(viz, intersec, blue);
 				stages.push_back(viz);
 				wrong_imgs.append(stages);
@@ -487,6 +496,18 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 		}
 		return (float)tot_skipped / imgs.size();
 	}
+};
+
+#pragma mark Optimizer
+
+// Cool but unused templates.
+template<unsigned N, typename T, typename... Ts>
+struct type_switch {
+	using type = typename type_switch<N - 1, Ts...>::type;
+};
+template<typename T, typename... Ts>
+struct type_switch<0, T, Ts...> {
+	using type = T;
 };
 
 // We increment start by step until it is less then stop.
@@ -533,6 +554,7 @@ struct Param {
 		case Tag::FLOAT:  return check_invariant(start.f, stop.f, step.f, current.f);
 		case Tag::DOUBLE: return check_invariant(start.d, stop.d, step.d, current.d);
 		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
 	}
 
 	void reset() {
@@ -543,6 +565,7 @@ struct Param {
 		case Tag::FLOAT:  current.f = start.f; return;
 		case Tag::DOUBLE: current.d = start.d; return;
 		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
 	}
 
 	void next() {
@@ -554,6 +577,7 @@ struct Param {
 		case Tag::FLOAT:  current.f += step.f; return;
 		case Tag::DOUBLE: current.d += step.d; return;
 		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
 	}
 
 	template<typename T>
@@ -581,6 +605,7 @@ struct Param {
 		case Tag::FLOAT:  return check_has_next(current.f, step.f, stop.f);
 		case Tag::DOUBLE: return check_has_next(current.d, step.d, stop.d);
 		}
+		CV_Error(cv::Error::Code::StsBadArg, "bad tag");
 	}
 
 #if 0
@@ -605,6 +630,16 @@ struct Param {
 #endif
 };
 
+std::ostream& operator <<(std::ostream& os, Param p) {
+	switch (p.tag) {
+	case Param::Tag::INT:    return os << p.current.i;
+	case Param::Tag::LONG:   return os << p.current.l;
+	case Param::Tag::FLOAT:  return os << p.current.f;
+	case Param::Tag::DOUBLE: return os << p.current.d;
+	}
+	CV_Error(cv::Error::Code::StsBadArg, "bad tag");
+}
+
 struct ParamIter {
 	Param *params;
 	unsigned length;
@@ -624,53 +659,95 @@ struct ParamIter {
 	}
 };
 
-/*
-Se debug
-	dobiamo mostrare l'interfaccia grafica e poi in base al tasto premuto
-	decidere se uscire o ricaricare (deallocanto opportunamente gli array.)
-Altrimenti
-	dobbiamo passare il fatto che debug è falso all'algoritmo (magari con una
-	variabile globale) così che evitano di appendere, non mostrare l'interfaccia
-	grafica ritornare quanti sono stati classificati correttamente e dire sempre
-	che si deve continuare.
-*/
-
-struct Result {
-	size_t tot_correct;
-	size_t skipped;
-	bool should_quit;
-};
+// TODO: make the order of DebugVec deterministic using an hashtable with ids
 
 extern "C" {
+// Return true if this function should be called again.
 bool
-run_classifier(bool debug, void *imgs_, void *labels_) {
+run_classifier(void *ids_, void *imgs_, void *labels_) {
 	int num_threads = cv::getNumThreads();
 
+	const std::vector<int64>& ids = *reinterpret_cast<std::vector<int64>*>(ids_);
 	const std::vector<cv::Mat>& imgs = *reinterpret_cast<std::vector<cv::Mat>*>(imgs_);
 	const std::vector<int16_t>& labels = *reinterpret_cast<std::vector<int16_t>*>(labels_);
 
 	std::vector<ParallelClassification::Size> correct(num_threads),
 		skipped(num_threads);
 
+#if 1
 	ParallelClassification classifier(imgs, labels, correct, skipped,
-		64,
-		// 35,  // mask_radius_scale
-		79,  // canny_threshold1
-		201, // canny_threshold2
-		// 70,
-		63,  // connected_component_area
-		14,  // hough_lines_threshold
-		10,  // hough_lines_minLineLength
-		99   //hough_lines_maxLineGap
+									  34,  // mask_radius_scale THIS NOT USED ANYMORE!
+									  79,  // canny_threshold1
+									  200, // canny_threshold2
+									  63,  // connected_component_area THIS IS NOT USED ANYMORE!
+									  15,  // hough_lines_threshold
+									  9,  // hough_lines_minLineLength
+									  99   // hough_lines_maxLineGap
 	);
 	cv::parallel_for_(cv::Range(0, imgs.size()), classifier);
 	
-	CV_LOG_INFO(NULL, "correct: " << classifier.get_accuracy())
-	CV_LOG_INFO(NULL, "skipped: " << classifier.get_skipped())
+	CV_LOG_INFO(NULL, "correct: " << classifier.get_accuracy());
+	CV_LOG_INFO(NULL, "skipped: " << classifier.get_skipped());
 
 	cv::String window_name = "misclassified";
 	return explore_dataset(window_name, wrong_imgs.mats);
-	// TODO: free skipped_imgs.mats and wrong_imgs.mats because if we reload to
-	// many times we might run out of memory.
+#else
+	Param params[] {
+		// mask_radius_scale
+		{34, 37, 1}, //35
+		// canny_threshold1
+		{79., 82., 1.}, // 80
+		// canny_threshold2
+		{199., 202., 1.}, // 200
+		// connected_component_area
+		{8*8-1, 8*8+2, 1}, // 8*8
+		// hough_lines_threshold
+		{14, 17, 1}, // 15
+		// hough_lines_minLineLength
+		{9., 12., 1.}, // 10
+		// hough_lines_maxLineGap
+		{99., 102., 2.}, // 100
+	};
+	constexpr size_t params_length = sizeof params / sizeof *params;
+
+	float best_score = 0;
+	// We initialize it with dummy parameters.
+	Param best_params[params_length] = {
+		{0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1}, {0,2,1},
+	};
+	for (ParamIter it = {params, params_length, false}; !it.finished; it.next()) {
+		size_t tot_correct = 0, tot_skipped = 0;
+		ParallelClassification classifier(imgs, labels, correct, skipped,
+			it.params[0].current.i, // mask_radius_scale THIS NOT USED ANYMORE!
+			it.params[1].current.d, // canny_threshold1
+			it.params[2].current.d, // canny_threshold2
+			it.params[3].current.i, // connected_component_area THIS IS NOT USED ANYMORE!
+			it.params[4].current.i, // hough_lines_threshold
+			it.params[5].current.d, // hough_lines_minLineLength
+			it.params[6].current.d  // hough_lines_maxLineGap
+		);
+		cv::parallel_for_(cv::Range(0, imgs.size()), classifier);
+		float score = classifier.get_accuracy();
+		CV_LOG_INFO(NULL, "correct: " << score);
+		CV_LOG_INFO(NULL, "skipped: " << classifier.get_skipped());
+		if (score > best_score) {
+			best_score = score;
+			std::copy(it.params, it.params + it.length, best_params);
+		}
+		CV_LOG_INFO(NULL, "best accuracy: " << best_score);
+		std::fill(correct.begin(), correct.end(), ParallelClassification::Size{0});
+		std::fill(skipped.begin(), skipped.end(), ParallelClassification::Size{0});
+		skipped_imgs.mats.clear(); wrong_imgs.mats.clear();
+	}
+
+	CV_LOG_INFO(NULL, "best score: " << best_score);
+	std::stringstream ss;
+	for (unsigned i = 0; i < params_length; ++i) {
+		ss << best_params[i] << ' ';
+	}
+	CV_LOG_INFO(NULL, "best params: " << ss.str());
+
+	return false;
+#endif
 }
 }
