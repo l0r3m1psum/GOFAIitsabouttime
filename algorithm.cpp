@@ -319,6 +319,48 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						}
 					}
 					stages.push_back(mask);
+					{
+						std::vector<cv::Mat> contours;
+						cv::Mat hierarchy;
+						cv::RetrievalModes mode = cv::RETR_LIST;
+						cv::Point offset = cv::Point();
+						cv::ContourApproximationModes method = cv::CHAIN_APPROX_SIMPLE;
+						cv::findContours(mask, contours, hierarchy, mode, method, offset);
+
+						std::vector<cv::RotatedRect> ellipses(contours.size());
+						for (cv::Mat contour : contours) {
+#if 0
+							CV_Assert(contour.depth() == CV_32S);
+							CV_Assert(contour.cols == 1);
+							CV_Assert(contour.rows % 2 == 0);
+							contour = contour.reshape(0, contour.rows/2);
+							CV_Assert(contour.cols == 2);
+							// Now we have a point per row.
+#endif
+							if (contour.rows < 5*2) {
+								continue;
+							}
+							cv::RotatedRect ellipse = cv::fitEllipse(contour);
+							// FIXME: this heuristic is shit. The ellipse found
+							// should also be inside the image for the most part.
+							if (ellipse.size.area() < standardized_size.area() * .8) {
+								continue;
+							}
+							// TODO: here if too many ellipses are detected or
+							// zero this is a good feed back point. The ideal
+							// number should be one ellipse. If the number is
+							// more than one the ellipses shuld all be near each
+							// other (almost overlappint). If they are arranged
+							// like this they can be fused with some sort of
+							// averaging!
+							ellipses.push_back(ellipse);
+						}
+						cv::Mat testerino = cv::Mat::zeros(standardized_size, CV_8UC3);
+						for (cv::RotatedRect ellipse : ellipses) {
+							cv::ellipse(testerino, ellipse, 255);
+						}
+						stages.push_back(testerino);
+					}
 					cv::bitwise_not(mask, mask);
 					cv::bitwise_and(work_img, mask, work_img);
 #endif
@@ -665,6 +707,7 @@ extern "C" {
 // Return true if this function should be called again.
 bool
 run_classifier(void *ids_, void *imgs_, void *labels_) {
+	// cv::setNumThreads(1);
 	int num_threads = cv::getNumThreads();
 
 	const std::vector<int64>& ids = *reinterpret_cast<std::vector<int64>*>(ids_);
