@@ -261,7 +261,16 @@ int main() {
 	ids.shrink_to_fit();
 	imgs.shrink_to_fit();
 	labels.shrink_to_fit();
-	
+
+#if 0
+	for (size_t i = 0; i < ids.size(); i++) {
+		if (!cv::imwrite("scontornati/" + std::to_string(ids[i]) + ".jpg", imgs[i])) {
+			std::cerr << "unable to write " << ids[i] << '\n';
+		}
+	}
+	return 0;
+#endif
+
 	while (true) {
 		void* module = dlopen("build/Debug/libalgorithm.dylib", RTLD_NOW);
 		if (module == NULL) {
