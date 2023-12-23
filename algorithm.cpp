@@ -197,6 +197,24 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// image is too small this gives us more pizels to work with.
 			{
 				double fx = 0, fy = 0;
+				// TODO: try to optimize parameters with this block in.
+				// In theory this should help because it removes the deformation
+				// introduced by the interpolation and we keep the original
+				// ratio of the image.
+#if 0
+				int top = 0, bottom = 0, left = 0, right = 0;
+				cv::BorderTypes borderType = cv::BORDER_REPLICATE;
+				if (img.size().height > img.size().width) {
+					int delta = img.size().height - img.size().width;
+					right = delta/2 + delta%2;
+					left = delta/2;
+				} else if (img.size().height < img.size().width) {
+					int delta = img.size().width - img.size().height;
+					bottom = delta/2 + delta%2;
+					top = delta/2;
+				}
+				cv::copyMakeBorder(copyTo(img, copied), img, top, bottom, left, right, borderType);
+#endif
 				cv::InterpolationFlags interpolation =
 					img.size().area() < standardized_size.area()
 					? cv::INTER_CUBIC : cv::INTER_AREA;
