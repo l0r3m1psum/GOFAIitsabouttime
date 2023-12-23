@@ -355,11 +355,11 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 							// averaging!
 							ellipses.push_back(ellipse);
 						}
-						cv::Mat testerino = cv::Mat::zeros(standardized_size, CV_8UC3);
+						cv::Mat ellipses_visualization = cv::Mat::zeros(standardized_size, CV_8UC3);
 						for (cv::RotatedRect ellipse : ellipses) {
-							cv::ellipse(testerino, ellipse, 255);
+							cv::ellipse(ellipses_visualization, ellipse, 255);
 						}
-						stages.push_back(testerino);
+						stages.push_back(ellipses_visualization);
 					}
 					cv::bitwise_not(mask, mask);
 					cv::bitwise_and(work_img, mask, work_img);
