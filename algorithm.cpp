@@ -88,16 +88,17 @@ explore_dataset(
 // Debugging utilities. ////////////////////////////////////////////////////////
 
 // TODO: it would be better to use a hashmap and iterate ofer it to have a
-// consistend order. The best thing would be to hash the ids.
+// consistent order. The best thing would be to hash the ids.
 struct DebugVec {
 	cv::Mutex mutex;
 	std::vector<cv::Mat> mats;
+	std::vector<int64> ids;
+	// TODO: add the ids as an argument to the algorithm.
+	// TODO: add the id as an argument to append.
+	// TODO: add the ids to the explore data function.
+	// TODO: add the id title of the window.
+	// TODO: sort the cv::Mat vector based on on the ids.
 
-	void append(cv::Mat mat) {
-		mutex.lock();
-		mats.push_back(mat);
-		mutex.unlock();
-	}
 	void append(std::vector<cv::Mat> &stages) {
 		cv::Mat tmp;
 		for (cv::Mat &stage : stages) {
@@ -107,7 +108,9 @@ struct DebugVec {
 			CV_Assert(stage.type() == CV_8UC3);
 		}
 		cv::hconcat(stages, tmp);
-		append(tmp);
+		mutex.lock();
+		mats.push_back(tmp);
+		mutex.unlock();
 	}
 };
 
@@ -197,24 +200,23 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// image is too small this gives us more pizels to work with.
 			{
 				double fx = 0, fy = 0;
-				// TODO: try to optimize parameters with this block in.
 				// In theory this should help because it removes the deformation
 				// introduced by the interpolation and we keep the original
 				// ratio of the image.
-#if 0
-				int top = 0, bottom = 0, left = 0, right = 0;
-				cv::BorderTypes borderType = cv::BORDER_REPLICATE;
-				if (img.size().height > img.size().width) {
-					int delta = img.size().height - img.size().width;
-					right = delta/2 + delta%2;
-					left = delta/2;
-				} else if (img.size().height < img.size().width) {
-					int delta = img.size().width - img.size().height;
-					bottom = delta/2 + delta%2;
-					top = delta/2;
+				if (false) { // TODO: enable this with an argument (so that it can be used for optimization.)
+					int top = 0, bottom = 0, left = 0, right = 0;
+					cv::BorderTypes borderType = cv::BORDER_REPLICATE;
+					if (img.size().height > img.size().width) {
+						int delta = img.size().height - img.size().width;
+						right = delta/2 + delta%2;
+						left = delta/2;
+					} else if (img.size().height < img.size().width) {
+						int delta = img.size().width - img.size().height;
+						bottom = delta/2 + delta%2;
+						top = delta/2;
+					}
+					cv::copyMakeBorder(copyTo(img, copied), img, top, bottom, left, right, borderType);
 				}
-				cv::copyMakeBorder(copyTo(img, copied), img, top, bottom, left, right, borderType);
-#endif
 				cv::InterpolationFlags interpolation =
 					img.size().area() < standardized_size.area()
 					? cv::INTER_CUBIC : cv::INTER_AREA;
@@ -262,6 +264,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					CV_Assert(work_img.type() == CV_8UC1);
 				}
 
+				cv::Mat mask_for_ellipse;
 				{
 					cv::Mat labels, stats, centroids;
 					int connectivity = 8, ltype = CV_16U, ccltype = cv::CCL_DEFAULT;
@@ -312,7 +315,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					}
 
 					cv::Mat mask = cv::Mat::zeros(standardized_size, CV_8UC1);
-#if 0
+#if 0 // This is not used anymore because the one with the annulus eurristics performs better.
 					// We remove all the "small" connected components.
 					for (int i = 1; i < n_labels; ++i) {
 						if (stats.at<int>(i, cv::CC_STAT_AREA) > connected_component_area)
@@ -321,11 +324,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					}
 					cv::bitwise_not(mask, mask);
 					cv::bitwise_and(work_img, mask, work_img);
-#endif
-					
+#else
 					stages.push_back(annulus_mask);
-#if 1
-					mask = cv::Mat::zeros(standardized_size, CV_8UC1);
 					for (int i = 1; i < n_labels; ++i) {
 						cv::Mat intersection(standardized_size, CV_8UC1, cv::Scalar(0));
 						cv::Mat filtered = labels == i;
@@ -337,53 +337,133 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						}
 					}
 					stages.push_back(mask);
-					{
-						std::vector<cv::Mat> contours;
-						cv::Mat hierarchy;
-						cv::RetrievalModes mode = cv::RETR_LIST;
-						cv::Point offset = cv::Point();
-						cv::ContourApproximationModes method = cv::CHAIN_APPROX_SIMPLE;
-						cv::findContours(mask, contours, hierarchy, mode, method, offset);
+					mask_for_ellipse = mask;
 
-						std::vector<cv::RotatedRect> ellipses(contours.size());
-						for (cv::Mat contour : contours) {
-#if 0
-							CV_Assert(contour.depth() == CV_32S);
-							CV_Assert(contour.cols == 1);
-							CV_Assert(contour.rows % 2 == 0);
-							contour = contour.reshape(0, contour.rows/2);
-							CV_Assert(contour.cols == 2);
-							// Now we have a point per row.
-#endif
-							if (contour.rows < 5*2) {
-								continue;
-							}
-							cv::RotatedRect ellipse = cv::fitEllipse(contour);
-							// FIXME: this heuristic is shit. The ellipse found
-							// should also be inside the image for the most part.
-							if (ellipse.size.area() < standardized_size.area() * .8) {
-								continue;
-							}
-							// TODO: here if too many ellipses are detected or
-							// zero this is a good feed back point. The ideal
-							// number should be one ellipse. If the number is
-							// more than one the ellipses shuld all be near each
-							// other (almost overlappint). If they are arranged
-							// like this they can be fused with some sort of
-							// averaging!
-							ellipses.push_back(ellipse);
-						}
-						cv::Mat ellipses_visualization = cv::Mat::zeros(standardized_size, CV_8UC3);
-						for (cv::RotatedRect ellipse : ellipses) {
-							cv::ellipse(ellipses_visualization, ellipse, 255);
-						}
-						stages.push_back(ellipses_visualization);
-					}
 					cv::bitwise_not(mask, mask);
 					cv::bitwise_and(work_img, mask, work_img);
 #endif
 
 					stages.push_back(work_img.clone());
+				}
+
+				{
+					std::vector<cv::Mat> contours;
+					cv::Mat hierarchy;
+					cv::RetrievalModes mode = cv::RETR_LIST;
+					cv::Point offset = cv::Point();
+					cv::ContourApproximationModes method = cv::CHAIN_APPROX_SIMPLE;
+					cv::findContours(mask_for_ellipse, contours, hierarchy, mode, method, offset);
+
+					std::vector<cv::RotatedRect> ellipses;
+					ellipses.reserve(contours.size());
+					for (cv::Mat contour : contours) {
+						// cv::fitEllipse needs at leas 5 points and
+						// cv::findContours stores them as a flat array.
+						if (contour.rows < 5*2) {
+							continue;
+						}
+						cv::RotatedRect ellipse = cv::fitEllipse(contour);
+						if (ellipse.size.empty()) {
+							continue;
+						}
+						// If the center of the ellipse is too distant from
+						// the center of the image we skip it.
+						if (line_length(ellipse.center, cv::Point2f(standardized_size/2)) > standardized_size.height/2) {
+							continue;
+						}
+
+						float ellipseArea = CV_PI * ellipse.size.height/2
+							* ellipse.size.width/2;
+						if (ellipseArea < standardized_size.area() * .6
+							|| ellipseArea > standardized_size.area()) {
+							continue;
+						}
+						cv::Mat intersectingRegion;
+						cv::RectanglesIntersectTypes intersectionType
+							= (cv::RectanglesIntersectTypes) cv::rotatedRectangleIntersection(
+							ellipse,
+							cv::RotatedRect(cv::Point2f(standardized_size/2), standardized_size, 0),
+							intersectingRegion
+						);
+						// If they intersect for less than 30% we skipp it.
+						if (intersectingRegion.empty()
+							|| cv::contourArea(intersectingRegion)
+								/standardized_size.area() < .3) {
+							continue;
+						}
+
+						ellipses.push_back(ellipse);
+					}
+					if (!ellipses.empty()) {
+						cv::Mat ellipses_visualization = cv::Mat::zeros(standardized_size, CV_8UC3);
+						cv::RotatedRect avg_ellipse;
+						float sin_sum = 0, cos_sum = 0;
+						for (size_t i = 0; i < ellipses.size(); i++) {
+							cv::ellipse(ellipses_visualization, ellipses[i], cv::Scalar(255, 255, 255));
+							float n = i+1;
+							// Circular mean https://en.wikipedia.org/wiki/Circular_mean#Definition
+							sin_sum += std::sin(ellipses[i].angle);
+							cos_sum += std::cos(ellipses[i].angle);
+							// TAOCP average
+							avg_ellipse.center += (ellipses[i].center - avg_ellipse.center)/n;
+							avg_ellipse.size += (ellipses[i].size - avg_ellipse.size)/n;
+						}
+						avg_ellipse.angle = cv::fastAtan2(sin_sum, cos_sum);
+						cv::ellipse(ellipses_visualization, avg_ellipse, cv::Scalar(0, 0, 255));
+						stages.push_back(ellipses_visualization);
+						cv::RotatedRect ellipse = avg_ellipse;
+						/*                          -------------
+						 *                    ------      |      ------
+						 *              ------            |            ------
+						 *        ------               r1 |                  ------
+						 *      --                        |                        --
+						 *    --          r2              |                          --
+						 *  ------------------------------+------------------------------
+						 *    --                          |                          --
+						 *      --                        |                        --
+						 *        ------                  |                  ------
+						 *              ------            |            ------
+						 *                    ------      |      ------
+						 *                          -------------
+						 */
+						// https://stackoverflow.com/a/77505123
+						// ellipse.angle += (ellipse.angle > 90 ? -90 : 90); // TODO: understand this.
+						// rMax and rMin would be better names.
+						float r1 = std::min(ellipse.size.height, ellipse.size.width)/2;
+						float r2 = std::max(ellipse.size.height, ellipse.size.width)/2;
+
+						auto degtopt = [](float deg) -> cv::Point2f {
+							return {std::cos(deg), std::sin(deg)};
+						};
+
+						cv::Point2f ip[4]; // input points
+						cv::Point2f op[4]; // output points
+
+						ip[0] = ellipse.center + degtopt(ellipse.angle + 0)   * r2;
+						ip[1] = ellipse.center + degtopt(ellipse.angle + 180) * r2;
+						ip[2] = ellipse.center + degtopt(ellipse.angle + 90)  * r1;
+						ip[3] = ellipse.center + degtopt(ellipse.angle + 270) * r1;
+						op[0] = ip[0];
+						op[1] = ip[1];
+						op[2] = ellipse.center + degtopt(ellipse.angle + 90)  * r2;
+						op[3] = ellipse.center + degtopt(ellipse.angle + 270) * r2;
+
+						cv::DecompTypes solveMethod = cv::DECOMP_LU;
+						cv::Mat homography = cv::getPerspectiveTransform(ip, op, solveMethod);
+
+						cv::Mat warped;
+						cv::BorderTypes borderMode = cv::BORDER_CONSTANT;
+						cv::warpPerspective(img, warped, homography, standardized_size, borderMode);
+						stages.push_back(warped);
+					} else {
+						cv::Mat placeHolder1 = cv::Mat::zeros(standardized_size, CV_8UC3);
+						putText(placeHolder1, "no ellipse", cv::Point(10, standardized_size.height/2));
+						stages.push_back(placeHolder1);
+						cv::Mat placeHolder2 = cv::Mat::zeros(standardized_size, CV_8UC3);
+						putText(placeHolder2, "no warp", cv::Point(10, standardized_size.height/2));
+						stages.push_back(placeHolder2);
+						// TODO: feedback point!
+					}
 				}
 
 				{
