@@ -745,8 +745,12 @@ run_classifier(void *ids_, void *imgs_, void *labels_) {
 									  9,  // hough_lines_minLineLength
 									  99   // hough_lines_maxLineGap
 	);
+	int64 start = cv::getTickCount();
 	cv::parallel_for_(cv::Range(0, imgs.size()), classifier);
-	
+	int64 elapsed = cv::getTickCount() - start;
+	std::cout << "Classifing took: " << elapsed/cv::getTickFrequency() << "s\n";
+
+
 	CV_LOG_INFO(NULL, "correct: " << classifier.get_accuracy());
 	CV_LOG_INFO(NULL, "skipped: " << classifier.get_skipped());
 

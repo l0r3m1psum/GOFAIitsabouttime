@@ -241,6 +241,8 @@ int main() {
 	cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_INFO);
 
 	{
+		int64 start = cv::getTickCount();
+
 		cv::Mutex mutex; // TODO: use std::mutex instead of std::recursive_mutex.
 		int num_threads = cv::getNumThreads();
 		// TODO: why is it necessary to specify 12 as the number of nstripes?
@@ -256,6 +258,9 @@ int main() {
 		base = 16;
 		ParallelRead openimg_reader(std::move(csv_stream), base_dir, base, mutex, ids, imgs, labels);
 		cv::parallel_for_(cv::Range(0, openimg_reader.csv.size()), openimg_reader, 12);
+
+		int64 elapsed = cv::getTickCount() - start;
+		std::cout << "Reading took: " << elapsed/cv::getTickFrequency() << "s\n";
 	}
 
 	ids.shrink_to_fit();
