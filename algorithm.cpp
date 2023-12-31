@@ -802,8 +802,6 @@ struct ParamIter {
 	}
 };
 
-// TODO: make the order of DebugVec deterministic using an hashtable with ids
-
 extern "C" {
 // Return true if this function should be called again.
 bool
@@ -811,9 +809,9 @@ run_classifier(void *ids_, void *imgs_, void *labels_) {
 	// cv::setNumThreads(1);
 	int num_threads = cv::getNumThreads();
 
-	std::vector<int64>& ids = *reinterpret_cast<std::vector<int64>*>(ids_);
-	std::vector<cv::Mat>& imgs = *reinterpret_cast<std::vector<cv::Mat>*>(imgs_);
-	std::vector<int16_t>& labels = *reinterpret_cast<std::vector<int16_t>*>(labels_);
+	const std::vector<int64>& ids = *reinterpret_cast<std::vector<int64>*>(ids_);
+	const std::vector<cv::Mat>& imgs = *reinterpret_cast<std::vector<cv::Mat>*>(imgs_);
+	const std::vector<int16_t>& labels = *reinterpret_cast<std::vector<int16_t>*>(labels_);
 
 	std::vector<ParallelClassification::Size> correct(num_threads),
 		skipped(num_threads);
@@ -841,11 +839,11 @@ run_classifier(void *ids_, void *imgs_, void *labels_) {
 		// https://en.wikipedia.org/wiki/Insertion_sort
 		int64 start = cv::getTickCount();
 		size_t i = 1;
-		while (i < ids.size()) {
+		while (i < wrong_imgs.ids.size()) {
 			size_t j = i;
-			while (j > 0 && ids[j-1] > ids[j]) {
-				std::swap(ids[j], ids[j-1]);
-				std::swap(imgs[j], imgs[j-1]);
+			while (j > 0 && wrong_imgs.ids[j-1] > wrong_imgs.ids[j]) {
+				std::swap(wrong_imgs.ids[j], wrong_imgs.ids[j-1]);
+				std::swap(wrong_imgs.mats[j], wrong_imgs.mats[j-1]);
 				j--;
 			}
 			i++;
