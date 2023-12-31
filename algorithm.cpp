@@ -42,23 +42,30 @@ putText(cv::Mat img, const cv::String &text, cv::Point org) {
 static bool
 explore_dataset(
 	const cv::String &window_name,
+	const std::vector<int64>& ids,
 	const std::vector<cv::Mat>& imgs) {
+	CV_Assert(ids.size() == imgs.size());
 	CV_Assert(imgs.size() > 0);
 
 	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
 
 	int index_max = imgs.size() - 1; // NOTE: this is a conversion from size_t to int
 	struct name_and_imgs {
-		const char *window_name;
+		const std::string &window_name;
+		const std::vector<int64> &ids;
 		const std::vector<cv::Mat> &imgs;
-	} data = {window_name.c_str(), imgs};
+	} data = {window_name, ids, imgs};
 	auto update_img = [](int pos, void *userdata) {
 		name_and_imgs *data = (name_and_imgs *) userdata;
 		cv::imshow(data->window_name, data->imgs[pos]);
+		cv::setWindowTitle(data->window_name, data->window_name + " - "
+						   + std::to_string(data->ids[pos]));
 	};
 	cv::createTrackbar("index", window_name, nullptr, index_max, update_img, &data);
 
 	cv::imshow(window_name, imgs[0]);
+	cv::setWindowTitle(window_name, window_name + " - "
+					   + std::to_string(ids[0]));
 	for (;;) {
 		int res;
 		switch (res = cv::pollKey()) {
@@ -87,19 +94,12 @@ explore_dataset(
 
 // Debugging utilities. ////////////////////////////////////////////////////////
 
-// TODO: it would be better to use a hashmap and iterate ofer it to have a
-// consistent order. The best thing would be to hash the ids.
 struct DebugVec {
 	cv::Mutex mutex;
 	std::vector<cv::Mat> mats;
 	std::vector<int64> ids;
-	// TODO: add the ids as an argument to the algorithm.
-	// TODO: add the id as an argument to append.
-	// TODO: add the ids to the explore data function.
-	// TODO: add the id title of the window.
-	// TODO: sort the cv::Mat vector based on on the ids.
 
-	void append(std::vector<cv::Mat> &stages) {
+	void append(std::vector<cv::Mat> &stages, int64 id) {
 		cv::Mat tmp;
 		for (cv::Mat &stage : stages) {
 			if (stage.type() == CV_8UC1) {
@@ -110,6 +110,7 @@ struct DebugVec {
 		cv::hconcat(stages, tmp);
 		mutex.lock();
 		mats.push_back(tmp);
+		ids.push_back(id);
 		mutex.unlock();
 	}
 };
@@ -127,6 +128,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 		};
 	};
 
+	const std::vector<int64>& ids;
 	const std::vector<cv::Mat>& imgs;
 	const std::vector<int16_t>& labels;
 	std::vector<Size> &correct;
@@ -141,6 +143,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 	double hough_lines_maxLineGap;
 
 	ParallelClassification(
+		const std::vector<int64>& ids,
 		const std::vector<cv::Mat>& imgs,
 		const std::vector<int16_t>& labels,
 		std::vector<Size> &correct,
@@ -152,7 +155,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 		int hough_lines_threshold,
 		double hough_lines_minLineLength,
 		double hough_lines_maxLineGap
-	) : imgs(imgs), labels(labels), correct(correct), skipped(skipped),
+	) : ids(ids), imgs(imgs), labels(labels), correct(correct), skipped(skipped),
 		mask_radius_scale(mask_radius_scale),
 		canny_threshold1(canny_threshold1),
 		canny_threshold2(canny_threshold2),
@@ -484,7 +487,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				}
 			}
 			if (!enough_lines) {
-				skipped_imgs.append(stages);
+				skipped_imgs.append(stages, ids[r]);
 				++skipped[thread_num];
 				continue;
 			}
@@ -616,7 +619,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				putText(viz, label_text, cv::Point(5, 110));
 				cv::drawMarker(viz, intersec, blue);
 				stages.push_back(viz);
-				wrong_imgs.append(stages);
+				wrong_imgs.append(stages, ids[r]);
 			}
 		}
 	}
@@ -808,15 +811,15 @@ run_classifier(void *ids_, void *imgs_, void *labels_) {
 	// cv::setNumThreads(1);
 	int num_threads = cv::getNumThreads();
 
-	const std::vector<int64>& ids = *reinterpret_cast<std::vector<int64>*>(ids_);
-	const std::vector<cv::Mat>& imgs = *reinterpret_cast<std::vector<cv::Mat>*>(imgs_);
-	const std::vector<int16_t>& labels = *reinterpret_cast<std::vector<int16_t>*>(labels_);
+	std::vector<int64>& ids = *reinterpret_cast<std::vector<int64>*>(ids_);
+	std::vector<cv::Mat>& imgs = *reinterpret_cast<std::vector<cv::Mat>*>(imgs_);
+	std::vector<int16_t>& labels = *reinterpret_cast<std::vector<int16_t>*>(labels_);
 
 	std::vector<ParallelClassification::Size> correct(num_threads),
 		skipped(num_threads);
 
 #if 1
-	ParallelClassification classifier(imgs, labels, correct, skipped,
+	ParallelClassification classifier(ids, imgs, labels, correct, skipped,
 									  34,  // mask_radius_scale THIS NOT USED ANYMORE!
 									  79,  // canny_threshold1
 									  200, // canny_threshold2
@@ -834,8 +837,25 @@ run_classifier(void *ids_, void *imgs_, void *labels_) {
 	CV_LOG_INFO(NULL, "correct: " << classifier.get_accuracy());
 	CV_LOG_INFO(NULL, "skipped: " << classifier.get_skipped());
 
+	{
+		// https://en.wikipedia.org/wiki/Insertion_sort
+		int64 start = cv::getTickCount();
+		size_t i = 1;
+		while (i < ids.size()) {
+			size_t j = i;
+			while (j > 0 && ids[j-1] > ids[j]) {
+				std::swap(ids[j], ids[j-1]);
+				std::swap(imgs[j], imgs[j-1]);
+				j--;
+			}
+			i++;
+		}
+		int64 elapsed = cv::getTickCount() - start;
+		std::cout << "Sorting took: " << elapsed/cv::getTickFrequency() << "s\n";
+	}
+
 	cv::String window_name = "misclassified";
-	return explore_dataset(window_name, wrong_imgs.mats);
+	return explore_dataset(window_name, wrong_imgs.ids, wrong_imgs.mats);
 #else
 	Param params[] {
 		// mask_radius_scale

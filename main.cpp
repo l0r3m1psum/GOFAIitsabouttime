@@ -234,7 +234,7 @@ void terminate_handler() {
 int main() {
 	std::terminate_handler old_terminate_handler = std::set_terminate(terminate_handler);
 	
-	std::vector<int64> ids;
+	std::vector<int64> ids; // WTF???? Why is it empty???
 	std::vector<cv::Mat> imgs;
 	std::vector<int16_t> labels;
 
@@ -263,6 +263,9 @@ int main() {
 		std::cout << "Reading took: " << elapsed/cv::getTickFrequency() << "s\n";
 	}
 
+	CV_Assert(ids.size() == imgs.size());
+	CV_Assert(imgs.size() == labels.size());
+
 	ids.shrink_to_fit();
 	imgs.shrink_to_fit();
 	labels.shrink_to_fit();
@@ -282,7 +285,7 @@ int main() {
 			CV_LOG_FATAL(NULL, dlerror());
 			return cv::Error::StsBadArg;
 		}
-		bool (* run_classifier)(bool, void *, void *) = (bool (*)(bool, void *, void *))dlsym(module, "run_classifier");
+		bool (* run_classifier)(void *, void *, void *) = (bool (*)(void *, void *, void *))dlsym(module, "run_classifier");
 		if (run_classifier == NULL) {
 			CV_LOG_FATAL(NULL, dlerror());
 			return cv::Error::StsBadArg;
