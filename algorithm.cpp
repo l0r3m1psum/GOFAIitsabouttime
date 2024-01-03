@@ -36,8 +36,18 @@ putText(cv::Mat img, const cv::String &text, cv::Point org) {
 		bottomLeftOrigin);
 }
 
+static float
+deg2rad(float x) {
+	return x * CV_PI/180;
+}
+
+static cv::Point2f
+deg2pt(float deg) {
+	return {std::cos(deg2rad(deg)), std::sin(deg2rad(deg))};
+}
+
 // TODO: this function should be able to visualize a list of list of images
-// to switch between them we can use up and dowon arrow. We have to remember the
+// to switch between them we can use up and down arrow. We have to remember the
 // posizion of the trackbar and change the dimension according to de dataset.
 static bool
 explore_dataset(
@@ -54,9 +64,11 @@ explore_dataset(
 		const std::string &window_name;
 		const std::vector<int64> &ids;
 		const std::vector<cv::Mat> &imgs;
+		int current_pos;
 	} data = {window_name, ids, imgs};
 	auto update_img = [](int pos, void *userdata) {
 		name_and_imgs *data = (name_and_imgs *) userdata;
+		data->current_pos = pos;
 		cv::imshow(data->window_name, data->imgs[pos]);
 		cv::setWindowTitle(data->window_name, data->window_name + " - "
 						   + std::to_string(data->ids[pos]));
@@ -72,6 +84,7 @@ explore_dataset(
 		case -1: break; // If no key was pressed.
 		case 'q': return false; // Quit.
 		case 'r': cv::destroyWindow(window_name); return true; // Reload.
+		case 'p': CV_LOG_INFO(NULL, ids[data.current_pos]); break;
 		case 63235: {
 			/* right arrow */
 			int pos = cv::getTrackbarPos("index", window_name);
@@ -117,6 +130,12 @@ struct DebugVec {
 
 static DebugVec skipped_imgs;
 static DebugVec wrong_imgs;
+
+// TODO: use the name of the color in the code.
+cv::Scalar
+	blue{255, 0, 0},      green{0, 255, 0},    red{0, 0, 255},
+	magenta{255, 0, 255}, cyan{255, 255, 0},   yellow{0, 255, 255},
+	white{255, 255, 255}, gray{127, 127, 127}, black{0, 0, 0};
 
 struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 
@@ -169,6 +188,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 	}
 
 	virtual void operator() (const cv::Range& range) const CV_OVERRIDE {
+		// TODO: determine which one of the two is necessary.
 		cv::theRNG().state = seed;
 		cv::setRNGSeed(seed);
 		cv::Mat copied; // For temporary copies needed by the various filters.
@@ -182,7 +202,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			cv::Mat outer_circle = annulus_mask.clone();
 			outer_circle = 255;
 			cv::Mat inner_circle = annulus_mask.clone();
-			// TODO: this radius has to be changed.
+			// TODO: this radius has to be passed as an argument.
 			cv::circle(img = inner_circle, center = standardized_size/2,
 					   radius = center.x/2, color = cv::Scalar(255), thickness = -1,
 					   lineType = cv::LINE_8, shift = 0);
@@ -201,6 +221,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// image resolution (e.g. we can use a fixed bluring kernel instead
 			// of using one that grows with the size of the image). Also if an
 			// image is too small this gives us more pizels to work with.
+			// TODO: the size should be an argument.
 			{
 				double fx = 0, fy = 0;
 				// In theory this should help because it removes the deformation
@@ -246,7 +267,16 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				}
 
 				// High pass filter for sharpening the image and removing noise.
+				// TODO: https://scikit-image.org/docs/dev/api/skimage.restoration.html#skimage.restoration.estimate_sigma
+				// could be a way to measure noise and decide how strong the blur
+				// should be
+				// TODO: try cv::adaptiveThreshold, closure, cv::findContorus
+				// and cv::drawContours as preprocessing steps.
+				// https://stackoverflow.com/a/72857570
+				// https://docs.opencv.org/4.9.0/df/d0d/tutorial_find_contours.html
 				{
+					double sigmaX = 0;
+					cv::GaussianBlur(copyTo(work_img, copied), work_img, cv::Size(3,3), sigmaX);
 					int ksize = A(int, 7, 5, 3)[attempt];
 					cv::medianBlur(copyTo(work_img, copied), work_img, ksize);
 					CV_Assert(work_img.size() == img.size());
@@ -267,6 +297,12 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					CV_Assert(work_img.type() == CV_8UC1);
 				}
 
+				// After edge detection we find a lot of candidates. Since we
+				// only care about finding the hands of the clock and the
+				// contour of the clock we use a mask together with connected
+				// components to reduce the nuber of edges that we don't care
+				// about. The foundamental assumption here is that the the watch
+				// is at the center of the image and it occupies the most of it.
 				cv::Mat mask_for_ellipse;
 				{
 					cv::Mat labels, stats, centroids;
@@ -340,7 +376,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						}
 					}
 					stages.push_back(mask);
-					mask_for_ellipse = mask;
+					mask_for_ellipse = mask.clone();
 
 					cv::bitwise_not(mask, mask);
 					cv::bitwise_and(work_img, mask, work_img);
@@ -366,6 +402,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 							continue;
 						}
 						cv::RotatedRect ellipse = cv::fitEllipse(contour);
+						CV_Assert(ellipse.angle < 360);
 						if (ellipse.size.empty()) {
 							continue;
 						}
@@ -405,14 +442,42 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 							cv::ellipse(ellipses_visualization, ellipses[i], cv::Scalar(255, 255, 255));
 							float n = i+1;
 							// Circular mean https://en.wikipedia.org/wiki/Circular_mean#Definition
-							sin_sum += std::sin(ellipses[i].angle);
-							cos_sum += std::cos(ellipses[i].angle);
+							sin_sum += std::sin(deg2rad(ellipses[i].angle));
+							cos_sum += std::cos(deg2rad(ellipses[i].angle));
 							// TAOCP average
 							avg_ellipse.center += (ellipses[i].center - avg_ellipse.center)/n;
 							avg_ellipse.size += (ellipses[i].size - avg_ellipse.size)/n;
 						}
 						avg_ellipse.angle = cv::fastAtan2(sin_sum, cos_sum);
+						CV_Assert(avg_ellipse.angle < 360);
+						// Drawing cartesian axes.
+						cv::line(ellipses_visualization,
+								 cv::Point(0, standardized_size.height/2),
+								 cv::Point(standardized_size.width, standardized_size.height/2),
+								 cv::Scalar(0,255,0));
+						cv::line(ellipses_visualization,
+								 cv::Point(standardized_size.width/2, 0),
+								 cv::Point(standardized_size.width/2, standardized_size.height),
+								 cv::Scalar(0,255,0));
 						cv::ellipse(ellipses_visualization, avg_ellipse, cv::Scalar(0, 0, 255));
+						// Drawing axes of the ellipse.
+						{
+							cv::Point2f points[4];
+							// The position of the point is given the name when
+							// the angle is 0. Therefore if the angle is < 180
+							// the so called "bottom" is at the top.
+							enum {bottomLeft, topLeft, topRight, bottomRight};
+							avg_ellipse.points(points);
+							// TODO: draw the points in the center of the ellipse
+							cv::line(ellipses_visualization,
+									 points[bottomLeft],
+									 points[topLeft],
+									 cv::Scalar(0, 0, 255));
+							cv::line(ellipses_visualization,
+									 points[bottomLeft],
+									 points[bottomRight],
+									 cv::Scalar(0, 0, 255));
+						}
 						stages.push_back(ellipses_visualization);
 						cv::RotatedRect ellipse = avg_ellipse;
 						/*                          -------------
@@ -431,25 +496,21 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						 */
 						// https://stackoverflow.com/a/77505123
 						// ellipse.angle += (ellipse.angle > 90 ? -90 : 90); // TODO: understand this.
-						// rMax and rMin would be better names.
 						float r1 = std::min(ellipse.size.height, ellipse.size.width)/2;
 						float r2 = std::max(ellipse.size.height, ellipse.size.width)/2;
-
-						auto degtopt = [](float deg) -> cv::Point2f {
-							return {std::cos(deg), std::sin(deg)};
-						};
 
 						cv::Point2f ip[4]; // input points
 						cv::Point2f op[4]; // output points
 
-						ip[0] = ellipse.center + degtopt(ellipse.angle + 0)   * r2;
-						ip[1] = ellipse.center + degtopt(ellipse.angle + 180) * r2;
-						ip[2] = ellipse.center + degtopt(ellipse.angle + 90)  * r1;
-						ip[3] = ellipse.center + degtopt(ellipse.angle + 270) * r1;
+						ip[0] = ellipse.center + deg2pt(ellipse.angle + 0)   * r1;
+						ip[1] = ellipse.center + deg2pt(ellipse.angle + 180) * r1;
+						ip[2] = ellipse.center + deg2pt(ellipse.angle + 90)  * r2;
+						ip[3] = ellipse.center + deg2pt(ellipse.angle + 270) * r2;
+						for (int i = 0; i < 4; i++) cv::circle(ellipses_visualization, ip[i], 3, cv::Scalar(0,255,0));
 						op[0] = ip[0];
 						op[1] = ip[1];
-						op[2] = ellipse.center + degtopt(ellipse.angle + 90)  * r2;
-						op[3] = ellipse.center + degtopt(ellipse.angle + 270) * r2;
+						op[2] = ellipse.center + deg2pt(ellipse.angle + 90)  * r1;
+						op[3] = ellipse.center + deg2pt(ellipse.angle + 270) * r1;
 
 						cv::DecompTypes solveMethod = cv::DECOMP_LU;
 						cv::Mat homography = cv::getPerspectiveTransform(ip, op, solveMethod);
@@ -458,6 +519,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						cv::BorderTypes borderMode = cv::BORDER_CONSTANT;
 						cv::warpPerspective(img, warped, homography, standardized_size, borderMode);
 						stages.push_back(warped);
+						cv::warpPerspective(copyTo(work_img, copied), work_img, homography, standardized_size, borderMode);
+						stages.push_back(copyTo(work_img, copied));
 					} else {
 						cv::Mat placeHolder1 = cv::Mat::zeros(standardized_size, CV_8UC3);
 						putText(placeHolder1, "no ellipse", cv::Point(10, standardized_size.height/2));
@@ -465,12 +528,13 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						cv::Mat placeHolder2 = cv::Mat::zeros(standardized_size, CV_8UC3);
 						putText(placeHolder2, "no warp", cv::Point(10, standardized_size.height/2));
 						stages.push_back(placeHolder2);
+						stages.push_back(placeHolder2);
 						// TODO: feedback point!
 					}
 				}
 
 				{
-					double rho = 1, theta = 1 * CV_PI / 180;
+					double rho = 1, theta = deg2rad(1);
 					// Since most images are small and noisy this parameters need
 					// to be low.
 					int threshold = hough_lines_threshold;
@@ -492,6 +556,8 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				continue;
 			}
 
+			// We cluster the lines to be left with just 2 (hopefully the hands
+			// of the clock).
 			constexpr int K = 2;
 			unsigned char centers_data[CV_ELEM_SIZE(CV_32FC1)*K*4] = {};
 			cv::Mat centers(K, 4, CV_32FC1, centers_data);
@@ -541,17 +607,18 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// furthest from the intersection of the lines passing between the two
 			// segments.
 			cv::Point2f intersec;
-			{
+			if (false) { // TODO: this should be passed as an argument.
 				float x1 = min_p1.x, x2 = min_p2.x, x3 = hour_p1.x, x4 = hour_p2.x,
 				      y1 = min_p1.y, y2 = min_p2.y, y3 = hour_p1.y, y4 = hour_p2.y;
 				float denumerator = (x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
 				float det_12 = x1*y2 - y1*x2, det_34 = x3*y4 - y3*x4;
 				intersec.x = (det_12*(x3-x4) - (x1-x2)*det_34)/denumerator;
 				intersec.y = (det_12*(y3-y4) - (y1-y2)*det_34)/denumerator;
+			} else {
+				// Since most images have the clock perfectly entered this
+				// performs way better than it should.
+				intersec = cv::Point2f(img.size()/2);
 			}
-			// Since most images have the clock perfectly entered this performs
-			// way better than it should.
-			intersec = cv::Point2f(img.size()/2);
 			// We want that p2 is the furthest from the center of the clock.
 			if (line_length(intersec, min_p1) > line_length(intersec, min_p2)) {
 				cv::swap(min_p1, min_p2);
