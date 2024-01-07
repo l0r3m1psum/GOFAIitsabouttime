@@ -12,6 +12,11 @@
 constexpr int cache_line_size = 64;
 constexpr int seed = 42;
 
+cv::Scalar
+	blue{255, 0, 0},      green{0, 255, 0},    red{0, 0, 255},
+	magenta{255, 0, 255}, cyan{255, 255, 0},   yellow{0, 255, 255},
+	white{255, 255, 255}, gray{127, 127, 127}, black{0, 0, 0};
+
 static double
 line_length(cv::Point2f a, cv::Point2f b) {
 	cv::Point2f diff = a - b;
@@ -28,11 +33,10 @@ static void
 putText(cv::Mat img, const cv::String &text, cv::Point org) {
 	cv::HersheyFonts fontFace = cv::FONT_HERSHEY_PLAIN;
 	double fontScale = 1;
-	cv::Scalar color(0x00, 0xff, 0x00); // green
 	int thickness = 1;
 	cv::LineTypes lineType = cv::FILLED;
 	bool bottomLeftOrigin = false;
-	cv::putText(img, text, org, fontFace, fontScale, color, thickness, lineType,
+	cv::putText(img, text, org, fontFace, fontScale, green, thickness, lineType,
 		bottomLeftOrigin);
 }
 
@@ -131,12 +135,6 @@ struct DebugVec {
 static DebugVec skipped_imgs;
 static DebugVec wrong_imgs;
 
-// TODO: use the name of the color in the code.
-cv::Scalar
-	blue{255, 0, 0},      green{0, 255, 0},    red{0, 0, 255},
-	magenta{255, 0, 255}, cyan{255, 255, 0},   yellow{0, 255, 255},
-	white{255, 255, 255}, gray{127, 127, 127}, black{0, 0, 0};
-
 struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 
 	struct alignas(cache_line_size) Size {
@@ -193,7 +191,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 		cv::setRNGSeed(seed);
 		cv::Mat copied; // For temporary copies needed by the various filters.
 		cv::Size standardized_size(128, 128);
-		cv::Mat annulus_mask(standardized_size, CV_8UC1, cv::Scalar(0));
+		cv::Mat annulus_mask(standardized_size, CV_8UC1, black);
 		{
 			// If you torture it enough...
 			cv::Mat img; cv::Point center; cv::Scalar color; cv::LineTypes lineType;
@@ -204,7 +202,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			cv::Mat inner_circle = annulus_mask.clone();
 			// TODO: this radius has to be passed as an argument.
 			cv::circle(img = inner_circle, center = standardized_size/2,
-					   radius = center.x/2, color = cv::Scalar(255), thickness = -1,
+					   radius = center.x/2, color = white, thickness = -1,
 					   lineType = cv::LINE_8, shift = 0);
 			
 			cv::subtract(outer_circle, inner_circle, annulus_mask);
@@ -366,7 +364,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 #else
 					stages.push_back(annulus_mask);
 					for (int i = 1; i < n_labels; ++i) {
-						cv::Mat intersection(standardized_size, CV_8UC1, cv::Scalar(0));
+						cv::Mat intersection(standardized_size, CV_8UC1, black);
 						cv::Mat filtered = labels == i;
 						cv::bitwise_and(filtered, annulus_mask, intersection);
 						float percentage_covered = (float) cv::countNonZero(intersection)
@@ -439,7 +437,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						cv::RotatedRect avg_ellipse;
 						float sin_sum = 0, cos_sum = 0;
 						for (size_t i = 0; i < ellipses.size(); i++) {
-							cv::ellipse(ellipses_visualization, ellipses[i], cv::Scalar(255, 255, 255));
+							cv::ellipse(ellipses_visualization, ellipses[i], white);
 							float n = i+1;
 							// Circular mean https://en.wikipedia.org/wiki/Circular_mean#Definition
 							sin_sum += std::sin(deg2rad(ellipses[i].angle));
@@ -454,12 +452,12 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						cv::line(ellipses_visualization,
 								 cv::Point(0, standardized_size.height/2),
 								 cv::Point(standardized_size.width, standardized_size.height/2),
-								 cv::Scalar(0,255,0));
+								 green);
 						cv::line(ellipses_visualization,
 								 cv::Point(standardized_size.width/2, 0),
 								 cv::Point(standardized_size.width/2, standardized_size.height),
-								 cv::Scalar(0,255,0));
-						cv::ellipse(ellipses_visualization, avg_ellipse, cv::Scalar(0, 0, 255));
+								 green);
+						cv::ellipse(ellipses_visualization, avg_ellipse, red);
 						// Drawing axes of the ellipse.
 						{
 							cv::Point2f points[4];
@@ -472,11 +470,11 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 							cv::line(ellipses_visualization,
 									 points[bottomLeft],
 									 points[topLeft],
-									 cv::Scalar(0, 0, 255));
+									 red);
 							cv::line(ellipses_visualization,
 									 points[bottomLeft],
 									 points[bottomRight],
-									 cv::Scalar(0, 0, 255));
+									 red);
 						}
 						stages.push_back(ellipses_visualization);
 						cv::RotatedRect ellipse = avg_ellipse;
@@ -506,7 +504,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 						ip[1] = ellipse.center + deg2pt(ellipse.angle + 180) * r1;
 						ip[2] = ellipse.center + deg2pt(ellipse.angle + 90)  * r2;
 						ip[3] = ellipse.center + deg2pt(ellipse.angle + 270) * r2;
-						for (int i = 0; i < 4; i++) cv::circle(ellipses_visualization, ip[i], 3, cv::Scalar(0,255,0));
+						for (int i = 0; i < 4; i++) cv::circle(ellipses_visualization, ip[i], 3, green);
 						op[0] = ip[0];
 						op[1] = ip[1];
 						op[2] = ellipse.center + deg2pt(ellipse.angle + 90)  * r1;
@@ -669,7 +667,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				++correct[thread_num];
 			} else {
 				cv::Mat viz = img.clone();
-				cv::Scalar red(0, 0, 0xff), green(0, 0xff, 0), blue(0xff, 0, 0);
 				for (int rowi = 0; rowi < lines.rows; ++rowi) {
 					cv::Mat row = lines.row(rowi);
 					cv::Point2f p1(row.at<int32_t>(0,0), row.at<int32_t>(0,1));
