@@ -12,7 +12,7 @@
 constexpr int cache_line_size = 64;
 constexpr int seed = 42;
 
-cv::Scalar
+const cv::Scalar
 	blue{255, 0, 0},      green{0, 255, 0},    red{0, 0, 255},
 	magenta{255, 0, 255}, cyan{255, 255, 0},   yellow{0, 255, 255},
 	white{255, 255, 255}, gray{127, 127, 127}, black{0, 0, 0};
@@ -559,6 +559,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			constexpr int K = 2;
 			unsigned char centers_data[CV_ELEM_SIZE(CV_32FC1)*K*4] = {};
 			cv::Mat centers(K, 4, CV_32FC1, centers_data);
+			double compactness = 0;
 			{
 				cv::Mat lines_float;
 				lines.convertTo(lines_float, CV_32F);
@@ -566,7 +567,7 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				cv::TermCriteria criteria(cv::TermCriteria::EPS
 					+ cv::TermCriteria::MAX_ITER, 10, 1.0);
 				int attempts = 10;
-				double compactness = cv::kmeans(
+				compactness = cv::kmeans(
 					lines_float,
 					K,
 					bestLabels,
@@ -676,11 +677,14 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 				cv::arrowedLine(viz, min_p1, min_p2, green);
 				cv::arrowedLine(viz, hour_p1, hour_p2, green);
 				cv::String predicted_text = cv::format("pred:  %d:%d", hour, minute);
-				putText(viz, predicted_text, cv::Point(5,20));
+				putText(viz, predicted_text, cv::Point(5,15));
+				// Right now the confidence has to be interpreted as "the lower the better".
+				cv::String confidence_text = cv::format("conf: %d", cv::saturate_cast<int>(compactness));
+				putText(viz, confidence_text, cv::Point(5, 30));
 				int label_hour = labels[r]/60;
 				int label_min = labels[r]%60;
 				cv::String label_text = cv::format("label: %d:%d", label_hour, label_min);
-				putText(viz, label_text, cv::Point(5, 110));
+				putText(viz, label_text, cv::Point(5, 125));
 				cv::drawMarker(viz, intersec, blue);
 				stages.push_back(viz);
 				wrong_imgs.append(stages, ids[r]);
