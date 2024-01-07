@@ -254,7 +254,6 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 			// sensitive edge detection. The opposite is true for the clocks
 			// with thinner hands.
 			cv::Mat lines;
-			bool enough_lines = false;
 			for (int attempt = 0; attempt < 3; ++attempt) {
 				stages.clear();
 				stages.push_back(img);
@@ -543,12 +542,14 @@ struct ParallelClassification CV_FINAL : public cv::ParallelLoopBody {
 					if (lines.rows >= 2) {
 						CV_Assert(lines.cols == 1);
 						CV_Assert(lines.type() == CV_32SC4);
-						enough_lines = true;
 						break;
+					} else {
+						// Just in case a single line is found.
+						lines = cv::Mat();
 					}
 				}
 			}
-			if (!enough_lines) {
+			if (lines.rows < 2) {
 				skipped_imgs.append(stages, ids[r]);
 				++skipped[thread_num];
 				continue;
