@@ -234,7 +234,7 @@ void terminate_handler() {
 int main() {
 	std::terminate_handler old_terminate_handler = std::set_terminate(terminate_handler);
 	
-	std::vector<int64> ids; // WTF???? Why is it empty???
+	std::vector<int64> ids;
 	std::vector<cv::Mat> imgs;
 	std::vector<int16_t> labels;
 
