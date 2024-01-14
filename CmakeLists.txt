@@ -30,6 +30,8 @@ target_link_libraries(blob opencv_core opencv_imgcodecs opencv_highgui
 set_target_properties(blob PROPERTIES XCODE_GENERATE_SCHEME TRUE
 	    XCODE_SCHEME_WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+add_custom_target(README SOURCES README.md)
+
 # (lldb) command alias compile platform shell build.sh
 # (lldb) compile
 # (lldb) target create main

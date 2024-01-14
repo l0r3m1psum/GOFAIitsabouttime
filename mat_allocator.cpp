@@ -1,3 +1,6 @@
+/* This code may be useful for profinilg allocations in the classification loop.
+ */
+
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/core_c.h>
 #include <iostream>

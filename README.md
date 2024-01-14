@@ -1,8 +1,12 @@
-https://gist.github.com/yangcha/38f2fa630e223a8546f9b48ebbb3e61a
-https://ros-developer.com/2017/12/04/list-opencv-matrix-types/
-https://docs.opencv.org/3.4/d3/d63/classcv_1_1Mat.html
-https://docs.opencv.org/3.4/d1/d1b/group__core__hal__interface.html
-https://docs.opencv.org/3.4/db/de0/group__core__utils.html
-https://docs.opencv.org/3.4/d6/d6e/group__imgproc__draw.html
+# [GOFAI](https://en.wikipedia.org/wiki/GOFAI) [itsabouttime](https://www.robots.ox.ac.uk/~vgg/research/time/)
 
-https://github.com/opencv/opencv/wiki/Profiling-OpenCV-Applications
+This code aims to replicate the results of [It's About Time: Analog Clock
+Reading in the Wild](https://www.robots.ox.ac.uk/~vgg/research/time/) using
+classic computer vision algorithms.
+
+# Resources
+
+  * [LIST OF MAT TYPE IN OPENCV](https://gist.github.com/yangcha/38f2fa630e223a8546f9b48ebbb3e61a)
+  * [List of OpenCv matrix types and mapping numbers](https://ros-developer.com/2017/12/04/list-opencv-matrix-types/)
+  * [OpenCV's docs](https://docs.opencv.org/)
+  * [Profiling OpenCV Applications](https://github.com/opencv/opencv/wiki/Profiling-OpenCV-Applications)
